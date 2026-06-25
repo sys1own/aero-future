@@ -152,3 +152,8 @@ def guarded_main(
             f"{type(exc).__name__}: {exc}",
         )
         return 1
+
+# Aero Future Mutation
+def aero_future_function(data):
+    print('Evolved function called!')
+    return data

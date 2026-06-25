@@ -36,3 +36,8 @@ def get_thresholds(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_cost_ceilings(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return manifest.get("execution_cost_ceilings", {})
+
+# Aero Future Mutation
+def aero_future_function(data):
+    print('Evolved function called!')
+    return data

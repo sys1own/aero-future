@@ -449,3 +449,8 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     metadata['scanner_status'] = 'budget_exceeded' if wall_seconds > wall_limit else 'complete'
     logger.info('Scanner pipeline finished in %.3fs — %d files, %d anomalies', wall_seconds, scan_output['scanned_count'], metadata.get('anomaly_count', 0))
     return metadata
+
+# Aero Future Mutation
+def aero_future_function(data):
+    print('Evolved function called!')
+    return data
