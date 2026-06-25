@@ -41,6 +41,17 @@ def _load_blueprint_config(path: Optional[str] = None) -> dict:
 
 def plan_command(args: argparse.Namespace) -> int:
     """Render the build DAG for a blueprint without executing it."""
+    # Aero-Calculus mode: render the physical HIN port topology of a .aeroc.
+    if getattr(args, "aeroc", None):
+        if not os.path.isfile(args.aeroc):
+            print(f"error: .aeroc not found: {args.aeroc}", file=sys.stderr)
+            return 1
+        from core.aeroc import load_aeroc
+
+        network = load_aeroc(args.aeroc)
+        print("\n".join(_render_aeroc_topology(network)))
+        return 0
+
     blueprint_path = args.blueprint or "blueprint.aero"
     if not os.path.isfile(blueprint_path):
         print(f"error: blueprint not found: {blueprint_path}", file=sys.stderr)
@@ -92,6 +103,10 @@ def plan_command(args: argparse.Namespace) -> int:
 
 def build_command(args: argparse.Namespace) -> int:
     """Run a build: either the isolated scaffold pipeline or the core engine."""
+    # Aero-Calculus native target: compile a source script to a .aeroc graph.
+    if getattr(args, "source", None):
+        return aero_build_command(args)
+
     workspace = args.workspace or "."
     blueprint_path = args.blueprint or os.path.join(workspace, "blueprint.aero")
 
@@ -456,6 +471,165 @@ def commit_overlay_command(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Aero-Calculus pipeline (HIN VM / translator / spacetime ledger)
+# ---------------------------------------------------------------------------
+
+
+def parse_source_to_uast(source_path: str) -> dict:
+    """Read a source script and lower it to the normalized UAST dialect."""
+    from core.aero_frontend import python_source_to_uast
+
+    with open(source_path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+    return python_source_to_uast(source)
+
+
+def _annotate_spacetime(network, ledger) -> None:
+    """Annotate every HIN node with a logical spacetime coordinate.
+
+    Each node is placed on a deterministic logical lattice and its mutation is
+    chronologically recorded in the Block Universe ledger, binding the node to
+    an absolute ``T_causal`` index.
+    """
+    from core.spacetime_ledger import CoordinateVector
+
+    for index, node in enumerate(list(network.nodes.values())):
+        coord = CoordinateVector(str(index), str(index * index), "0", -1)
+        ledger.annotate_node(node, coord, {"agent": type(node).__name__})
+
+
+def serialize_and_save_hin(network, output_path: str) -> str:
+    """Serialize a compiled HIN network to a ``.aeroc`` file on disk."""
+    from core.aeroc import save_aeroc
+
+    return save_aeroc(network, output_path)
+
+
+def handle_aero_calculus_build(
+    source_path: str, output_path: str, reduce_graph: bool = True
+) -> dict:
+    """Compile a source script to Aero-Calculus, verify, reduce and serialize.
+
+    Returns a small report describing the compiled and (optionally) minimized
+    topology.  The reduced graph is what is persisted to ``output_path`` so the
+    on-disk ``.aeroc`` is the optimized topology.
+    """
+    from core.translator import UASTToHINTranslator
+    from core.spacetime_ledger import RigidityVerifier, BlockUniverseLedger
+
+    print(f"[*] Ingesting Source Context: {source_path}")
+    uast_representation = parse_source_to_uast(source_path)
+
+    print("[*] Performing Homomorphic UAST-to-HIN Translation...")
+    translator = UASTToHINTranslator()
+    network = translator.translate_uast(uast_representation)
+    compiled_nodes = len(network.nodes)
+
+    print("[*] Conducting Boundary coordinate-perturbation sweeps...")
+    verifier = RigidityVerifier()
+    # Verify each compiled module boundary's algebraic rigidity.  Boundaries
+    # are derived from node coordinates; an empty/degenerate boundary is simply
+    # skipped (nothing to deform).
+    ledger = BlockUniverseLedger(os.path.join(os.path.dirname(os.path.abspath(output_path)) or ".", "context.aero"))
+    _annotate_spacetime(network, ledger)
+    boundary = [n for n in network.nodes.values() if getattr(n, "coordinate", None)]
+    try:
+        verifier.verify_boundary(boundary)
+        rigidity = "verified"
+    except Exception as exc:  # noqa: BLE001 - surface as a report field
+        rigidity = f"anomaly: {exc}"
+
+    reduced_steps = 0
+    if reduce_graph:
+        print("[*] Reducing graph to its minimized normal form inside the HIN VM...")
+        reduced_steps = network.run_to_completion()
+
+    serialize_and_save_hin(network, output_path)
+    print(f"[+] Aero-Calculus Compilation Complete! Saved to {output_path}")
+
+    return {
+        "source": source_path,
+        "output": output_path,
+        "compiled_nodes": compiled_nodes,
+        "reduced_nodes": len(network.nodes),
+        "reduction_steps": reduced_steps,
+        "rigidity": rigidity,
+        "ledger_length": len(ledger),
+    }
+
+
+def _render_aeroc_topology(network) -> List[str]:
+    """Render the physical HIN port-connection topology of a network."""
+    lines: List[str] = []
+    lines.append(f"Aero-Calculus HIN topology ({len(network.nodes)} nodes)")
+    lines.append("")
+    if network.active_pairs:
+        lines.append("Active pairs (p ⋈ p):")
+        for a, b in network.active_pairs:
+            lines.append(f"  {a.node_id} ⋈ {b.node_id}")
+        lines.append("")
+    lines.append("Physical port connections:")
+    seen = set()
+    for node in network.nodes.values():
+        for port in node.ports():
+            target = port.target
+            if target is None:
+                continue
+            key = frozenset((id(port), id(target)))
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(
+                f"  {node.node_id}.{port.name} ── {target.owner.node_id}.{target.name}"
+            )
+    return lines
+
+
+def aero_build_command(args: argparse.Namespace) -> int:
+    """``build --source`` entry point: compile a script to ``.aeroc``."""
+    source = args.source
+    if not os.path.isfile(source):
+        print(f"error: source not found: {source}", file=sys.stderr)
+        return 1
+    output = args.aeroc_out or (os.path.splitext(source)[0] + ".aeroc")
+    try:
+        report = handle_aero_calculus_build(
+            source, output, reduce_graph=not args.no_reduce
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: aero-calculus build failed: {exc}", file=sys.stderr)
+        return 1
+    print("")
+    print(f"  compiled nodes : {report['compiled_nodes']}")
+    print(f"  reduced nodes  : {report['reduced_nodes']}")
+    print(f"  reduction steps: {report['reduction_steps']}")
+    print(f"  rigidity       : {report['rigidity']}")
+    return 0
+
+
+def evolve_command(args: argparse.Namespace) -> int:
+    """Type-safe graph-rewriting evolution over a compiled ``.aeroc`` file."""
+    import evolve as evolve_engine
+
+    if not os.path.isfile(args.aeroc):
+        print(f"error: .aeroc not found: {args.aeroc}", file=sys.stderr)
+        return 1
+    try:
+        report = evolve_engine.evolve_aeroc(
+            args.aeroc, generations=args.generations, output_path=args.output
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: evolution failed: {exc}", file=sys.stderr)
+        return 1
+    print("Aero-Calculus evolution complete")
+    print(f"  generations    : {report['generations']}")
+    print(f"  start nodes     : {report['start_nodes']}")
+    print(f"  final nodes     : {report['final_nodes']}")
+    print(f"  saved           : {report['output']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------
 
@@ -482,11 +656,44 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the hardware-polymorphization rewrite stage.",
     )
+    p_build.add_argument(
+        "--source",
+        default=None,
+        help="Compile a source script to an Aero-Calculus .aeroc graph and run it.",
+    )
+    p_build.add_argument(
+        "--aeroc-out",
+        dest="aeroc_out",
+        default=None,
+        help="Output path for the compiled .aeroc (default: <source>.aeroc).",
+    )
+    p_build.add_argument(
+        "--no-reduce",
+        action="store_true",
+        help="Skip HIN-VM graph reduction; serialize the un-reduced topology.",
+    )
     p_build.set_defaults(handler=build_command)
 
     p_plan = sub.add_parser("plan", help="Render the build DAG without executing it.")
     p_plan.add_argument("--blueprint", default=None, help="Path to the blueprint file.")
+    p_plan.add_argument(
+        "--aeroc",
+        default=None,
+        help="Render the physical HIN port topology of a compiled .aeroc file.",
+    )
     p_plan.set_defaults(handler=plan_command)
+
+    p_evolve = sub.add_parser(
+        "evolve", help="Type-safe graph-rewriting evolution over a .aeroc graph."
+    )
+    p_evolve.add_argument("--aeroc", required=True, help="Compiled .aeroc graph to evolve.")
+    p_evolve.add_argument(
+        "--generations", type=int, default=8, help="Evolution generations to run."
+    )
+    p_evolve.add_argument(
+        "--output", default=None, help="Output path (default: overwrite input)."
+    )
+    p_evolve.set_defaults(handler=evolve_command)
 
     p_heal = sub.add_parser("heal", help="Run self-healing on a single source file.")
     p_heal.add_argument("--path", required=True, help="File to heal.")
