@@ -2,48 +2,72 @@
 
 **Aero Future is a universal, self‑adaptive build system that can become any build tool you need.**  
 
-It is the evolutionary successor to AeroNova: while AeroNova introduced the concept of a **living blueprint** that drives deterministic builds[cite: 2], Aero Future extends that into a **self‑evolving platform** where the blueprint itself can grow, mutate, and adapt to any workload, language, or scale[cite: 2].
-
-Now, with the integration of the **Aero-Calculus**, Aero Future is also a native **Holographic Interaction Net execution environment**. It bypasses traditional linear execution paradigms, executing code compilation and optimization as pure, type-safe topological geometry[cite: 2].
-
-> **Aero Future: one blueprint to build them all — and let the blueprint build itself.**
+It is the evolutionary successor to AeroNova: while AeroNova introduced the concept of a **living blueprint** that drives deterministic builds, Aero Future extends that into a **self‑evolving platform** where the blueprint itself can grow, mutate, and adapt to any workload, language, or scale.
 
 ---
 
 ## Vision
 
-Traditional build systems (Make, Bazel, Cargo, etc.) are fixed: they have a hard‑coded set of rules, phases, and target formats[cite: 2]. Aero Future breaks this mold by treating the entire build lifecycle as a **declarative, queryable, and evolvable specification**[cite: 2].
+Traditional build systems (Make, Bazel, Cargo, etc.) are fixed: they have a hard‑coded set of rules, phases, and target formats. Aero Future breaks this mold by treating the entire build lifecycle as a **declarative, queryable, and evolvable specification**.
 
-- **Blueprints are executable**: A single `blueprint.aero` (or `self_host.aero`) can describe **any** build pipeline, from compiling a single‑file script to orchestrating a polyglot microservices monorepo[cite: 2].
-- **Context is king**: You can inject external knowledge — source code, documentation, test suites, hardware profiles, even high‑level project goals — as context that the system ingests and uses to shape the build[cite: 2].
-- **Infinite customizability**: Because the system can rewrite its own blueprint and source code, it can **retrofit itself** to match new requirements without manual intervention[cite: 2].
-- **Bespoke Native Compilation**: By mapping workflows directly to the **Aero-Calculus**, the system can compile code directly to unified, zero-allocation computational graphs (`.aeroc`), discarding traditional VM overhead[cite: 2].
+- **Blueprints are executable**: A single `blueprint.aero` (or `self_host.aero`) can describe **any** build pipeline, from compiling a single‑file script to orchestrating a polyglot microservices monorepo.
+- **Context is king**: You can inject external knowledge — source code, documentation, test suites, hardware profiles, even high‑level project goals — as context that the system ingests and uses to shape the build.
+- **Infinite customizability**: Because the system can rewrite its own blueprint and source code, it can **retrofit itself** to match new requirements without manual intervention.
 
-In short: **Aero Future is not a build tool; it is a build‑tool builder.**[cite: 2]
+In short: **Aero Future is not a build tool; it is a build‑tool builder.**
 
 ---
 
 ## How It Works
 
-At its core, Aero Future is a **multi‑stage optimization engine** that converts a high‑level specification (the blueprint) and a set of contexts (code, tests, hardware, goals) into an optimal, executable build pipeline[cite: 2].
+At its core, Aero Future is a **multi‑stage optimization engine** that converts a high‑level specification (the blueprint) and a set of contexts (code, tests, hardware, goals) into an optimal, executable build pipeline.
 
 ### 1. Blueprint as a Living Document
-The blueprint (`.aero` TOML) defines the target metrics, workspace constraints, feature specs, and scaling partitions[cite: 2]. This is a fluid document that the engine can rewrite mid-flight to dynamically specialize itself to your exact workload[cite: 2].
 
-### 2. Context Ingestion Layer (UAST)
-You can feed Aero Future with any combination of languages, test profiles, or documentation[cite: 2]. The system normalizes this inputs by parsing them into a language-agnostic **Universal Abstract Syntax Tree (UAST)**[cite: 2], transforming raw text code into mathematical geometry[cite: 2].
+The blueprint (`.aero` TOML) defines:
+- **Workspace structure** (root, build directories, exclusions)
+- **Targets** (source paths, languages, output formats, dependencies)
+- **Scaling boundaries** (complexity thresholds, split rules)
+- **Optimization strategies** (Pareto frontier tuning, genetic algorithms)
+- **Self‑healing policies** (retry budgets, LSP diagnostics)
+- **Evolution parameters** (mutation rates, population sizes, generation limits)
+- **Feature specs** (which modules to generate and evolve)
 
-### 3. Aero-Calculus Engine (HIN Graph Reduction)
-When configured to output native bytecode, the UAST homomorphically maps directly into a **Holographic Interaction Net (HIN)** execution graph[cite: 2]. 
-- Computation proceeds entirely through local graph reductions (Beta-reduction, duplication, erasure)[cite: 2].
-- Variables are replaced by physical topological edges, and memory safety is guaranteed at compilation time via a strict linear type system based on Multiplicative-Exponential Linear Logic (MELL)[cite: 2].
-- This yields completely **zero heap allocations** and predictable runtime speed[cite: 2].
+This is not a static file — it can be **mutated, extended, and re‑interpreted** during the build, allowing the system to adapt mid‑flight.
 
-### 4. Self‑Evolution & Topological Mutations
-The adaptive core runs an multi-objective evolutionary algorithm (NSGA-II)[cite: 2]. It breeds optimal parameters, prunes unreachable paths via $O(1)$ graph eraser nodes, and applies safe topological crossovers directly on code structures without risking syntax invalidity[cite: 2].
+### 2. Context Injection
 
-### 5. Block Universe Memory
-Every mutation, execution trace, and compile metric is permanently recorded into an append-only ledger (`context.aero`)[cite: 2]. At runtime, the Aero-Calculus nodes query this static temporal continuum using causal inference, substituting historically optimized, pre-compacted subgraphs on demand[cite: 2].
+You can feed Aero Future with **any kind of context**:
+- Source code (multiple languages)
+- Test suites
+- API documentation (`.md`, `.txt`, `.pdf`)
+- Hardware profiles (CPU, cache, SIMD)
+- Performance benchmarks from previous runs
+- Developer feedback (via `feedback.json`)
+
+The system ingests this context, builds a semantic graph (UAST), and uses it to guide decisions: which optimizations to apply, which parameters to tune, which features to generate.
+
+### 3. Self‑Evolution
+
+The evolution loop is the engine’s **adaptive core**:
+
+- It mutates the **blueprint parameters** (compiler flags, threshold values, population sizes).
+- It mutates the **source code** of the engine itself (inserting new functions, adjusting imports, adding docstrings).
+- It generates **new modules** from high‑level feature specs (causal inference, experience replay, multi‑task BO).
+- It tests every mutation by rebuilding and rerunning the test suite.
+- It keeps only the changes that improve performance (speed, size, accuracy) and rolls back failures.
+
+Over time, the system **specializes to your workload**, discovering configurations and code structures that no human would have thought of.
+
+### 4. Block Universe Memory
+
+Every mutation, every build, every metric is stored in an append‑only ledger (`context.aero`). This creates a **cryptographically verifiable history** — the Block Universe — which the system can query to:
+- Avoid repeating failed configurations.
+- Recombine successful historical settings (SHX crossover).
+- Estimate causal effects of parameters (causal inference).
+- Transfer knowledge across different projects (multi‑task Bayesian optimization).
+
+This is what makes Aero Future **infinite**: it never forgets, and it never stops learning.
 
 ---
 
@@ -53,11 +77,19 @@ Every mutation, execution trace, and compile metric is permanently recorded into
 
 | Use Case | How Aero Future Helps |
 |----------|------------------------|
-| **Polyglot Monorepo** | Blueprint declares targets across multiple languages; the system coordinates cross‑language dependencies and optimizations[cite: 2]. |
-| **Aero-Calculus Compilation** | Target files can be native-compiled into `.aeroc` graphs, eliminating runtime VM registers, memory pointers, and garbage collection cycles[cite: 2]. |
-| **Automatic Module Mitosis** | When a module's structural complexity passes its configured threshold, the engine uses spectral graph partitioning (Fiedler vector) to cleanly slice the file apart and generate its own API interfaces[cite: 2]. |
-| **Self-Healing Topologies** | Uses Language Server Protocol (LSP) lookahead reflux to trap errors mid-mutation and automatically heal broken syntax structures[cite: 2]. |
-| **Timeless History Tracking** | Query the Block Universe ledger to safely replay execution pipelines, evaluate regression causes, or run speculative tests across the Pareto frontier[cite: 2]. |
+| **Polyglot Monorepo** | Blueprint can declare targets in Rust, Python, C++, and more; the system orchestrates cross‑language dependencies and optimizations. |
+| **Embedded/HPC Optimization** | Hardware profiling + Pareto tuning + source mutation can produce binaries that are 30‑50% faster than standard builds. |
+| **Continuous Improvement** | Run the evolution loop periodically (e.g., nightly) to let the system gradually improve your build without human intervention. |
+| **Custom Build Pipeline** | Write a blueprint that defines a completely new pipeline (e.g., for data processing, ML training, firmware flashing) — the system will execute it. |
+| **Self‑Healing Builds** | The self‑healing engine automatically repairs syntax errors and missing imports, reducing build breakage in CI. |
+
+### For Tool Builders
+
+Aero Future is a **platform for building build systems**:
+
+- **Define a new build frontend**: Write a blueprint and a set of context parsers, and you have a new build tool tailored to your domain.
+- **Evolve your tool**: Because the system can mutate its own code, you can let it add new features over time — zero manual coding required.
+- **Scale horizontally**: The architecture is designed for distributed evolution (multiple sandboxed instances sharing the ledger), enabling large‑scale optimisation.
 
 ---
 
@@ -66,39 +98,43 @@ Every mutation, execution trace, and compile metric is permanently recorded into
 ### Installation
 
 ```bash
-git clone [https://github.com/sys1own/aero-future.git](https://github.com/sys1own/aero-future.git)
+git clone https://github.com/sys1own/aero-future.git
 cd aero-future
 pip install -e .
-
 ```
 
-### Seeing the Blueprint & Custom Language in Action
+### Running Your First Evolution
 
 ```bash
-# Build and compile your targets (outputs hyper-optimized .aeroc networks for configured modules)
+# Start with a simple self‑evolution run (5 generations, population 8)
+python evolve.py . 5 8
+```
+
+This will:
+- Generate any missing feature modules (causal inference, EHEL, etc.) from the blueprint.
+- Mutate parameters and source code.
+- Rebuild and test.
+- Log results to `context.aero`.
+- Show you the best performance gain per generation.
+
+### Seeing the Blueprint in Action
+
+```bash
+# Build using the current blueprint (standard build)
 python main.py build
 
-# Visualize the build DAG and localized HIN port connections 
+# Visualize the build DAG
 python main.py plan
 
-# Initiate type-safe graph-rewriting mutations on your compiled code
-python main.py evolve
-
-```
-
-### Running System Self‑Evolution
-
-```bash
-# Execute a self-evolution tuning run (5 generations, population 8)
-python evolve.py . 5 8
-
+# Run self‑healing on a specific file
+python main.py heal --path builder_brains/compactor.py
 ```
 
 ---
 
 ## Configuration
 
-The heart of Aero Future is the blueprint. Below is an annotated snippet of `self_host.aero` demonstrating the implementation parameters of the new computational architecture:
+The heart of Aero Future is the blueprint. Below is an annotated snippet of `self_host.aero` that demonstrates its flexibility:
 
 ```toml
 [workspace]
@@ -109,7 +145,7 @@ build_dir = ".aero/bootstrap_stage"
 enabled = true
 mutation_rate = 0.8
 target_files = ["*.py", "builder_brains/*.py"]
-rules = ["insert_function_stub", "insert_import", "add_docstring"][cite: 2]
+rules = ["insert_function_stub", "insert_import", "add_docstring"]
 
 [features]
 [features.causal_inference]
@@ -117,48 +153,54 @@ enabled = true
 [features.ehel]
 enabled = true
 [features.multi_task_bo]
-enabled = true[cite: 2]
+enabled = true
 
 [cortex]
 target_accuracy_floor = 0.9990
-cycles = 10[cite: 2]
+cycles = 10
 
 [cortex.nsga2]
 population_size = 20
 mutation_rate = 0.15
-crossover_rate = 0.80[cite: 2]
+crossover_rate = 0.80
 
+[self_host]
+bootstrap_stage = 1
+atomic_swap_directory = "bin/aero_engine"
 ```
+
+**Add any new feature** by simply adding a `[features.<name>]` section. The system will generate and evolve it.
 
 ### The Living Blueprint Schema
 
-You can instantly assign any source module to native Aero-Calculus compilation via the strategic front-end schema:
+The strategic, polyglot front-end of a blueprint is the **living-blueprint** schema:
+a small, typed document that declares the system identity, the source contexts to
+ingest, and the scaling boundaries that drive automatic module decomposition.
 
 ```toml
 [system]
 name = "production-scale-polyglot-pipeline"
 strategy = "universal-engine"
-ephemeral_code = true[cite: 2]
+ephemeral_code = true
 
 [context_registry.core_application]
 path = "./src/app_logic.py"
 language = "python"
 preserve_original_logic = false
-compile_target = "aero-calculus"  # Homomorphically lowers UAST nodes to .aeroc graphs
 
 [scaling]
-auto_split_threshold = 120        # Triggers spectral partitioning minimum-cuts
+auto_split_threshold = 120
 max_module_complexity = 12
-hierarchy_depth = 4[cite: 2]
-
+hierarchy_depth = 4
 ```
 
-* **`compile_target = "aero-calculus"`** — Instructs the compiler frontend to completely bypass text serialization and lower the logic straight to high-precision interaction net bytecodes.
-
-
-* **`[scaling]`** — The absolute complexity boundary constraints. If a module crosses 120 nodes, coordinate-perturbation sweeps check algebraic boundary rigidity against the **(26, 8, 312)** kernel model before safely dividing the file. If an anomaly occurs, an `AnomalyClosureError` triggers to protect state consistency.
-
-
+- **`[system]`** — the engine identity and global strategy. `ephemeral_code = true`
+  lets the system freely regenerate intermediate artifacts.
+- **`[context_registry.<name>]`** — each source context to ingest, its language, and
+  whether its original logic must be preserved verbatim.
+- **`[scaling]`** — the structural-complexity thresholds that trigger automatic
+  splitting (`auto_split_threshold`), per-module complexity caps
+  (`max_module_complexity`), and the maximum hierarchy depth.
 
 ---
 
@@ -174,55 +216,35 @@ hierarchy_depth = 4[cite: 2]
 │  └─────────────────────┘   └─────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────┐   ┌─────────────────────────────┐ │
-│  │   Evolution Loop    │   │    Aero-Calculus Engine     │ │
-│  │ (NSGA-II, Safe Graph│   │  (HIN VM, MELL Type System, │ │
-│  │  AST Crossovers)    │   │   Rigidity Verifier Layer)  │ │
-│  └─────────────────────┘   └─────────────────────────────┘ │
+│  │   Evolution Loop    │   │   Self-Healing v2 Engine    │ │
+│  │ (NSGA-II, SHX,      │   │ (Lookahead, LSP reflux)     │ │
+│  │  Source Mutation,   │   └─────────────────────────────┘ │
+│  │  Feature Generation)│                                    │
+│  └─────────────────────┘                                    │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────┐   ┌─────────────────────────────┐ │
 │  │   Block Universe    │   │   Runtime Sandbox           │ │
-│  │ (context.aero,      │   │ (shadow builds, atomic swap,│ │
-│  │  VP Tree, Causality)│   │  .aeroc serialization)      │ │
-│  └─────────────────────┘   └─────────────────────────────┘ │
+│  │ (context.aero,      │   │ (shadow builds, atomic swap)│ │
+│  │  VP Tree, Causal    │   └─────────────────────────────┘ │
+│  │  Inference)         │                                    │
+│  └─────────────────────┘                                    │
 └─────────────────────────────────────────────────────────────┘
-
 ```
 
 ---
 
 ## Comparison: AeroNova → Aero Future
 
-| Aspect | AeroNova | Aero Future (Aero-Calculus Update) |
-| --- | --- | --- |
-| **Paradigm** | Deterministic build optimization
-
- | Self‑evolving topological graph orchestration
-
- |
-| **Blueprints** | Static, read‑only
-
- | Living, mutable, evolvable
-
- |
-| **Execution Path** | Target language text emission | Homomorphic UAST-to-HIN native compilation
-
- |
-| **Memory Architecture** | Standard OS/VM stack framing | Zero runtime heap-allocations via linear port-bindings
-
- |
-| **History** | Minimal caching
-
- | Static Block Universe ledger (`context.aero`)
-
- |
-| **Evolution Stability** | Manual codebase modifications
-
- | 100% type-safe graph mutations via MELL logic axioms
-
- |
-| **Module Splitting** | Manual refactoring thresholds | Automated spectral graph bisection via Fiedler vector
-
- |
+| Aspect | AeroNova | Aero Future |
+|--------|----------|-------------|
+| **Paradigm** | Deterministic build optimization | Self‑evolving build orchestration |
+| **Blueprints** | Static, read‑only | Living, mutable, evolvable |
+| **Adaptation** | Fixed multi‑objective tuner | Autonomous source/parameter mutation |
+| **Feature Addition** | Manual code changes | Automatic generation from specs |
+| **History** | Minimal caching | Full Block Universe ledger |
+| **Self‑Healing** | Bounded (3‑retry) | Extended with feature generation |
+| **Customizability** | High (via blueprint) | Infinite (via self‑evolution) |
+| **Target** | Any codebase | Any codebase + the system itself |
 
 ---
 
@@ -234,10 +256,11 @@ MIT License — use it freely, evolve it infinitely.
 
 ## The Future
 
-Aero Future is designed to be **the last build tool you'll ever need**, because it can become any build tool you'll ever need. As the network of user-compiled `.aeroc` configurations scales, the system continues to map, compress, and record the absolute geometry of code.
+Aero Future is designed to be **the last build tool you'll ever need**, because it can become any build tool you'll ever need. As it evolves, it will:
 
-**Aero Future: build without boundaries.**
-
-```
+- Generate its own documentation.
+- Write its own tests.
+- Scale across distributed workers.
+- Support more languages and frameworks — automatically, from their source code and documentation.
 
 ```
