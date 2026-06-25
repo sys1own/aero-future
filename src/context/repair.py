@@ -142,33 +142,72 @@ class CodeRepairer:
             return source, []
 
         # Functions with no annotation that never return a value -> ``-> None``.
-        targets: Dict[int, str] = {}
+        # We capture each target's def-line and the line of its first body
+        # statement so we can locate the signature's terminal ``:`` even when the
+        # parameter list spans multiple lines. ``returns_value`` is evaluated only
+        # over Return nodes that belong to *this* function (not nested defs).
+        targets: List[Tuple[int, int, str]] = []
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is None:
-                returns_value = any(
-                    isinstance(n, ast.Return) and n.value is not None
-                    for n in ast.walk(node)
-                )
-                if not returns_value:
-                    targets[node.lineno] = node.name
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.returns is not None:
+                continue
+            returns_value = any(
+                isinstance(n, ast.Return) and n.value is not None
+                for n in self._own_nodes(node)
+            )
+            if returns_value or not node.body:
+                continue
+            body_line = node.body[0].lineno
+            targets.append((node.lineno, body_line, node.name))
+
         if not targets:
             return source, []
 
         lines = source.splitlines()
         changes: List[str] = []
-        for lineno, name in targets.items():
-            idx = lineno - 1
-            if idx >= len(lines):
+        # Process bottom-up so inserting annotations never shifts the line
+        # indices of targets we have yet to edit.
+        for def_line, body_line, name in sorted(targets, key=lambda t: t[0], reverse=True):
+            colon_idx = self._signature_colon_line(lines, def_line - 1, body_line - 1)
+            if colon_idx is None:
                 continue
-            line = lines[idx]
-            # Only handle single-line signatures ending in ``):``.
-            m = re.match(r"^(\s*(?:async\s+)?def\s+\w+\s*\(.*\))\s*:\s*$", line)
-            if m:
-                lines[idx] = f"{m.group(1)} -> None:"
+            line = lines[colon_idx]
+            # Match the signature's closing ``)`` immediately followed by ``:``.
+            # Preserve any trailing comment after the colon.
+            m = re.match(r"^(?P<head>.*\))\s*:(?P<rest>\s*(#.*)?)$", line)
+            if m and "->" not in line:
+                lines[colon_idx] = f"{m.group('head')} -> None:{m.group('rest')}"
                 changes.append(f"type_inference: annotated '{name}' return as None")
+
         if not changes:
             return source, []
         return "\n".join(lines) + ("\n" if source.endswith("\n") else ""), changes
+
+    @staticmethod
+    def _own_nodes(func: ast.AST):
+        """Yield nodes belonging to *func*, excluding nested function bodies.
+
+        Prevents a nested function's ``return value`` from suppressing the outer
+        function's ``-> None`` inference.
+        """
+        for child in ast.iter_child_nodes(func):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            yield child
+            yield from CodeRepairer._own_nodes(child)
+
+    @staticmethod
+    def _signature_colon_line(lines: List[str], def_idx: int, body_idx: int) -> Optional[int]:
+        """Locate the line index holding the signature's terminal ``):``.
+
+        Scans from the ``def`` line up to (but not into) the first body line and
+        returns the last line that ends a signature with ``):`` (optionally with
+        a trailing comment). Handles both single- and multi-line signatures.
+        """
+        end = body_idx if body_idx > def_idx else def_idx + 1
+        for idx in range(min(def_idx, len(lines) - 1), min(end, len(lines))):
+            if re.search(r"\)\s*:\s*(#.*)?$", lines[idx]):
+                return idx
+        return None
 
     # ------------------------------------------------------------------
     # Helpers

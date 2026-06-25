@@ -36,6 +36,57 @@ test_suite = "tests/invariants/run_all.sh"
 context_ledger = "context.aero"
 feedback_override = "feedback.json"
 
+# ---------------------------------------------------------------------------
+# Dynamic, schema-driven genome (directive #1).
+#
+# Each [evolution.genome.<name>] sub-table fully declares one tunable
+# parameter: its TOML location (`path`), `type`, inclusive `min`/`max`
+# boundaries, mutation `step`, and `default`. The evolution engine builds its
+# genome purely from this metadata -- there is no hardcoded positional indexing
+# anywhere in evolve.py. Add a parameter here and the GA picks it up
+# automatically; the `path` is also where the mutated value is written back
+# into this blueprint so the subsequent build observes it.
+# ---------------------------------------------------------------------------
+[evolution.genome.target_accuracy_floor]
+path = "cortex.target_accuracy_floor"
+type = "float"
+min = 0.995
+max = 0.9999
+step = 0.0001
+default = 0.995
+
+[evolution.genome.cycles]
+path = "cortex.cycles"
+type = "int"
+min = 5
+max = 20
+step = 1
+default = 11
+
+[evolution.genome.population_size]
+path = "cortex.nsga2.population_size"
+type = "int"
+min = 5
+max = 50
+step = 1
+default = 28
+
+[evolution.genome.mutation_rate]
+path = "cortex.nsga2.mutation_rate"
+type = "float"
+min = 0.05
+max = 0.25
+step = 0.001
+default = 0.101
+
+[evolution.genome.crossover_rate]
+path = "cortex.nsga2.crossover_rate"
+type = "float"
+min = 0.50
+max = 0.95
+step = 0.001
+default = 0.678
+
 [self_host]
 bootstrap_stage = 1
 isolate_paths = true
@@ -72,9 +123,6 @@ read_only_paths = [
 enabled = true
 
 [features.ehel]
-enabled = true
-
-[features.multi_task_bo]
 enabled = true
 
 [features.multi_task_bo]

@@ -31,8 +31,19 @@ import os
 import shutil
 import sys
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+
+def _isolation_token() -> str:
+    """A collision-resistant token for per-process/per-thread staging dirs.
+
+    Combines the PID, the current thread id and a short random component so two
+    concurrent optimization runs (or parallel candidate evaluations) never share
+    a staging subdirectory on the same filesystem.
+    """
+    return f"p{os.getpid()}_t{threading.get_ident()}_{uuid.uuid4().hex[:8]}"
 
 logger = logging.getLogger("core.bootstrap.isolation")
 
@@ -149,9 +160,14 @@ class BootstrapStage:
             stage.discard()   # rollback -- remove staging cache
     """
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, isolation_token: Optional[str] = None) -> None:
         self.workspace_root = workspace_root.resolve()
-        self.stage_dir = self.workspace_root / _STAGE_DIR_NAME
+        # Process-isolated staging (requirement #5): each stage lives in a
+        # uniquely-named subdirectory under the shared base so concurrent runs
+        # never collide on the filesystem. The base dir is created lazily.
+        self.stage_base = self.workspace_root / _STAGE_DIR_NAME
+        self.isolation_token = isolation_token or _isolation_token()
+        self.stage_dir = self.stage_base / self.isolation_token
         self._prepared = False
         self._promoted = False
 

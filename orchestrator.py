@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1054,11 +1055,23 @@ class AeroShadowStagingManager:
     #: Relative location of the scratch staging cache under the workspace root.
     STAGE_SUBPATH = os.path.join(".aero", "bootstrap_stage")
 
-    def __init__(self, workspace_root: str, build_retry_budget: int = 3) -> None:
+    def __init__(
+        self,
+        workspace_root: str,
+        build_retry_budget: int = 3,
+        isolation_token: Optional[str] = None,
+    ) -> None:
         self.workspace_root = os.path.abspath(workspace_root)
         # The retry budget B is bound to a maximum value of 3.
         self.build_retry_budget = max(1, min(int(build_retry_budget), 3))
-        self.stage_root = os.path.join(self.workspace_root, self.STAGE_SUBPATH)
+        # Process-isolated staging (requirement #5): a uniquely-named
+        # subdirectory under the shared base prevents filesystem collisions when
+        # multiple healing transactions or candidate evaluations run in parallel.
+        self.stage_base = os.path.join(self.workspace_root, self.STAGE_SUBPATH)
+        self.isolation_token = isolation_token or (
+            f"heal_p{os.getpid()}_t{threading.get_ident()}_{uuid.uuid4().hex[:8]}"
+        )
+        self.stage_root = os.path.join(self.stage_base, self.isolation_token)
         os.makedirs(self.stage_root, exist_ok=True)
 
     # ------------------------------------------------------------------ #
