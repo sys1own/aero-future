@@ -178,7 +178,14 @@ def _python_build_fn(path: Path):
 
 
 def heal_command(args: argparse.Namespace) -> int:
-    """Run the bounded self-healing loop against a single source file."""
+    """Run self-healing: topological re-wiring on a graph, or source repair."""
+    # Aero-Calculus mode: geometrically re-wire un-terminated HIN edges.
+    if getattr(args, "aeroc", None):
+        return aero_heal_command(args)
+
+    if not getattr(args, "path", None):
+        print("error: heal requires --path or --aeroc", file=sys.stderr)
+        return 1
     target = Path(args.path)
     if not target.is_file():
         print(f"error: file not found: {target}", file=sys.stderr)
@@ -515,6 +522,7 @@ def handle_aero_calculus_build(
     on-disk ``.aeroc`` is the optimized topology.
     """
     from core.translator import UASTToHINTranslator
+    from core.hin_vm import UniversalHINNetwork
     from core.spacetime_ledger import RigidityVerifier, BlockUniverseLedger
 
     print(f"[*] Ingesting Source Context: {source_path}")
@@ -525,14 +533,19 @@ def handle_aero_calculus_build(
     network = translator.translate_uast(uast_representation)
     compiled_nodes = len(network.nodes)
 
+    ledger_path = os.path.join(
+        os.path.dirname(os.path.abspath(output_path)) or ".", "context.aero"
+    )
+    ledger = BlockUniverseLedger(ledger_path)
+    _annotate_spacetime(network, ledger)
+
+    print("[*] Applying automatic module mitosis (Fiedler spectral partition)...")
+    primary, secondary = translator.execute_mitosis(network)
+    mitosis_split = len(secondary.nodes) > 0
+
     print("[*] Conducting Boundary coordinate-perturbation sweeps...")
     verifier = RigidityVerifier()
-    # Verify each compiled module boundary's algebraic rigidity.  Boundaries
-    # are derived from node coordinates; an empty/degenerate boundary is simply
-    # skipped (nothing to deform).
-    ledger = BlockUniverseLedger(os.path.join(os.path.dirname(os.path.abspath(output_path)) or ".", "context.aero"))
-    _annotate_spacetime(network, ledger)
-    boundary = [n for n in network.nodes.values() if getattr(n, "coordinate", None)]
+    boundary = [n for n in primary.nodes.values() if getattr(n, "coordinate", None)]
     try:
         verifier.verify_boundary(boundary)
         rigidity = "verified"
@@ -542,18 +555,26 @@ def handle_aero_calculus_build(
     reduced_steps = 0
     if reduce_graph:
         print("[*] Reducing graph to its minimized normal form inside the HIN VM...")
-        reduced_steps = network.run_to_completion()
+        # Lower into the UniversalHINNetwork: ledger hot-swapping + per-step
+        # algebraic rigidity sweeps drive the reduction.
+        uni = UniversalHINNetwork.adopt(primary, ledger=ledger, ledger_path=ledger_path)
+        reduced_steps = uni.run_to_completion()
 
-    serialize_and_save_hin(network, output_path)
+    serialize_and_save_hin(primary, output_path)
+    if mitosis_split:
+        part2 = os.path.splitext(output_path)[0] + ".part2.aeroc"
+        serialize_and_save_hin(secondary, part2)
+        print(f"[+] Module mitosis emitted secondary partition -> {part2}")
     print(f"[+] Aero-Calculus Compilation Complete! Saved to {output_path}")
 
     return {
         "source": source_path,
         "output": output_path,
         "compiled_nodes": compiled_nodes,
-        "reduced_nodes": len(network.nodes),
+        "reduced_nodes": len(primary.nodes),
         "reduction_steps": reduced_steps,
         "rigidity": rigidity,
+        "mitosis_split": mitosis_split,
         "ledger_length": len(ledger),
     }
 
@@ -607,6 +628,30 @@ def aero_build_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def aero_heal_command(args: argparse.Namespace) -> int:
+    """Geometrically re-wire un-terminated edges in a compiled ``.aeroc``."""
+    if not os.path.isfile(args.aeroc):
+        print(f"error: .aeroc not found: {args.aeroc}", file=sys.stderr)
+        return 1
+    from core.aeroc import load_aeroc, save_aeroc
+    from orchestrator import TopologicalSelfHealer
+
+    network = load_aeroc(args.aeroc)
+    healer = TopologicalSelfHealer()
+    broken = healer.find_unterminated_ports(network)
+    print(f"[Heal] Topological self-healing: {len(broken)} un-terminated edge(s)")
+    try:
+        report = healer.heal_network(network)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: self-healing failed: {exc}", file=sys.stderr)
+        return 1
+    network.validate_conservation()
+    out = args.output or args.aeroc
+    save_aeroc(network, out)
+    print(f"[Heal] re-wired {report['healed']} edge(s); remaining={report['remaining']}")
+    return 0
+
+
 def evolve_command(args: argparse.Namespace) -> int:
     """Type-safe graph-rewriting evolution over a compiled ``.aeroc`` file."""
     import evolve as evolve_engine
@@ -616,7 +661,10 @@ def evolve_command(args: argparse.Namespace) -> int:
         return 1
     try:
         report = evolve_engine.evolve_aeroc(
-            args.aeroc, generations=args.generations, output_path=args.output
+            args.aeroc,
+            generations=args.generations,
+            output_path=args.output,
+            mutation_rate=args.mutation_rate,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"error: evolution failed: {exc}", file=sys.stderr)
@@ -691,12 +739,27 @@ def create_parser() -> argparse.ArgumentParser:
         "--generations", type=int, default=8, help="Evolution generations to run."
     )
     p_evolve.add_argument(
+        "--mutation-rate",
+        dest="mutation_rate",
+        type=float,
+        default=0.1,
+        help="SHX type-safe mutation rate per node (default: 0.1).",
+    )
+    p_evolve.add_argument(
         "--output", default=None, help="Output path (default: overwrite input)."
     )
     p_evolve.set_defaults(handler=evolve_command)
 
-    p_heal = sub.add_parser("heal", help="Run self-healing on a single source file.")
-    p_heal.add_argument("--path", required=True, help="File to heal.")
+    p_heal = sub.add_parser("heal", help="Run self-healing on a source file or .aeroc graph.")
+    p_heal.add_argument("--path", default=None, help="Source file to heal.")
+    p_heal.add_argument(
+        "--aeroc",
+        default=None,
+        help="Topologically re-wire un-terminated edges in a compiled .aeroc.",
+    )
+    p_heal.add_argument(
+        "--output", default=None, help="Output path for the healed .aeroc (default: in place)."
+    )
     p_heal.set_defaults(handler=heal_command)
 
     p_scaffold = sub.add_parser(
