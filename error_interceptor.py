@@ -152,3 +152,30 @@ def guarded_main(
             f"{type(exc).__name__}: {exc}",
         )
         return 1
+
+
+# ---------------------------------------------------------------------------
+# Self-Healing v2: reify a parse/dependency failure as a broken HIN edge
+# ---------------------------------------------------------------------------
+def reify_parse_failure_as_port(network, message: str):
+    """Reify a compiler/parser failure as an un-terminated HIN edge.
+
+    Instead of regex/string lookahead patching, an unresolved error becomes a
+    physical broken boundary interface port: a Constructor whose return path
+    (``a_2``) is left without a partner.  The argument path is safely
+    terminated so exactly one edge is un-terminated -- the fault site that
+    :class:`orchestrator.TopologicalSelfHealer` will geometrically re-wire.
+    Returns the un-terminated :class:`~core.hin_vm.Port`.
+    """
+    from core.hin_vm import ConstructorNode, EraserNode
+
+    node = ConstructorNode(network.fresh_id("γ"))
+    network.register_node(node)
+    node.broken_reason = message
+
+    eraser = EraserNode(network.fresh_id("ε"))
+    network.register_node(eraser)
+    network._link(eraser.p, node.a_1)
+
+    # a_2 is deliberately left un-terminated: the reified broken edge.
+    return node.a_2
