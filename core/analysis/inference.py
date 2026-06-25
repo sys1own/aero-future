@@ -368,10 +368,16 @@ class InferenceEngine:
         text = bp_path.read_text(encoding="utf-8") if bp_path.is_file() else ""
         text = _strip_table(text, "dag")
 
+        # An edge that points at another node in this graph is rewritten to that
+        # node's sanitized key so the table stays internally consistent; edges to
+        # external/unsanitized references are preserved verbatim.
+        node_keys = set(dag)
         lines = ["[dag]"]
         for module in sorted(dag):
             deps = dag[module]
-            array = "[" + ", ".join(_toml_str(d) for d in deps) + "]"
+            array = "[" + ", ".join(
+                _toml_str(_toml_key(d) if d in node_keys else d) for d in deps
+            ) + "]"
             lines.append('"' + _toml_key(module) + '" = ' + array)
         block = "\n".join(lines) + "\n"
 

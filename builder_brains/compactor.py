@@ -755,8 +755,3 @@ class TwoTieredStructuralMerger:
             result.append(lines[i])
             i += 1
         return result
-
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data

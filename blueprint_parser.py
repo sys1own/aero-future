@@ -1140,8 +1140,3 @@ def parse_blueprint(blueprint_path: str, manifest_path: str = _MANIFEST_PATH) ->
     except Exception as exc:
         logger.exception("Blueprint parsing failed for %s", blueprint_path)
         return create_fallback_context(stable_manifest, f"Parser failure: {exc}")
-
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data

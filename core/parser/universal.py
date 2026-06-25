@@ -299,8 +299,8 @@ def _flatten_fallback_tree(tree: Dict[str, Any], language: str) -> List[Dict[str
             "id": node_id, "parent": parent_id, "children": [], "type": current["type"],
             "grammar": current["type"], "category": category.value,
             "canonical_kind": _canonical_kind(language, current["type"]), "named": current.get("named", True),
-            "start_byte": current["start_byte"], "end_byte": current["end_byte"],
-            "start_point": current["start_point"], "end_point": current["end_point"],
+            "start_byte": current.get("start_byte", 0), "end_byte": current.get("end_byte", 0),
+            "start_point": current.get("start_point", (0, 0)), "end_point": current.get("end_point", (0, 0)),
             "is_error": False, "is_missing": False
         }
         flat_nodes.append(record)
@@ -348,7 +348,25 @@ def extract_symbols(uast: Dict[str, Any], source: str = "") -> Dict[str, List[st
 def _empty_uast(language: str, source: bytes, file_path: Optional[str], flags: Dict[str, Any]) -> Dict[str, Any]:
     return {"metadata": {"language": language, "file_path": file_path, "file_hash": hashlib.sha256(source).hexdigest(), "source_bytes": len(source), "byte_span": [0, len(source)], "node_count": 0, "parser_flags": flags}, "root": None, "nodes": [], "semantic_hash": hashlib.sha256(b"").hexdigest()}
 
+def _fallback_uast(source: bytes, language: str, file_path: Optional[str], flags: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    """Build a fallback UAST when the native grammar is unavailable or fails.
+
+    Uses the lightweight ``ast``-based (Python) or lexical (other languages)
+    tree builder, flattens it into the standard node array, and stamps the
+    parser flags with ``fallback=True`` and the supplied *reason*.
+    """
+    source_str = source.decode("utf-8", "replace")
+    fallback_tree = _parse_fallback_python(source_str) if language == "python" else _parse_fallback_lexical(source_str, language)
+    nodes = _flatten_fallback_tree(fallback_tree, language)
+    flags = dict(flags, fallback=True, fallback_reason=reason)
+    uast = {"metadata": {"language": language, "file_path": file_path, "file_hash": hashlib.sha256(source).hexdigest(), "source_bytes": len(source), "byte_span": [0, len(source)], "node_count": len(nodes), "parser_flags": flags}, "root": 0 if nodes else None, "nodes": nodes}
+    uast["semantic_hash"] = semantic_hash_from_nodes(nodes)
+    return uast
+
+
 def parse_bytes(source: bytes, language: str, *, file_path: Optional[str] = None) -> Dict[str, Any]:
+    if language not in supported_languages():
+        raise UniversalParseError(f"Unsupported language: {language!r}")
     base_flags = {"fallback": False, "fallback_reason": None, "has_error": False, "error_nodes": 0, "missing_nodes": 0, "error_locations": [], "truncated": False, "parse_seconds": 0.0}
     if len(source) > MAX_FILE_BYTES:
         return _empty_uast(language, source, file_path, dict(base_flags, fallback=True, fallback_reason="file_too_large", truncated=True))
@@ -372,13 +390,8 @@ def parse_bytes(source: bytes, language: str, *, file_path: Optional[str] = None
         return uast
     except Exception as exc:
         elapsed = time.monotonic() - start
-        source_str = source.decode("utf-8", "replace")
-        fallback_tree = _parse_fallback_python(source_str) if language == "python" else _parse_fallback_lexical(source_str, language)
-        nodes = _flatten_fallback_tree(fallback_tree, language)
-        flags = dict(base_flags, fallback=True, fallback_reason=f"fallback_activated:{type(exc).__name__}", parse_seconds=round(elapsed, 4))
-        uast = {"metadata": {"language": language, "file_path": file_path, "file_hash": hashlib.sha256(source).hexdigest(), "source_bytes": len(source), "byte_span": [0, len(source)], "node_count": len(nodes), "parser_flags": flags}, "root": 0 if nodes else None, "nodes": nodes}
-        uast["semantic_hash"] = semantic_hash_from_nodes(nodes)
-        return uast
+        flags = dict(base_flags, parse_seconds=round(elapsed, 4))
+        return _fallback_uast(source, language, file_path, flags, f"fallback_activated:{type(exc).__name__}")
 
 def parse_source(source: str, language: str, *, file_path: Optional[str] = None) -> Dict[str, Any]:
     return parse_bytes(source.encode("utf-8"), language, file_path=file_path)
@@ -393,6 +406,14 @@ def semantic_hash(source: str, language: str) -> str:
     return parse_source(source, language)["semantic_hash"]
 
 
-def load_language(*args, **kwargs):
-    """Fallback compatibility stub to satisfy legacy structural tree-sitter imports."""
-    return None
+def load_language(language: Optional[str] = None, *args, **kwargs):
+    """Return the loaded Tree-sitter ``Language`` object for *language*.
+
+    This is the public entry point used by the inference engine and the
+    self-healing toolchain to build native parsers/queries.  The language name
+    is resolved through the same cached grammar loader used internally, so a
+    successfully registered grammar yields a real ``Language`` (never ``None``).
+    """
+    if language is None:
+        raise UniversalParseError("load_language requires a language name")
+    return _load_language(language)

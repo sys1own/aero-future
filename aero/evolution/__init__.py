@@ -1,6 +1,8 @@
 # Aero Evolution package
+"""Self-evolution components: feature generation, SHX crossover, source mutation."""
 
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data
+from aero.evolution.feature_generator import FeatureGenerator
+from aero.evolution.shx import SearchHistoryDrivenCrossover
+from aero.evolution.source_mutator import SourceMutator
+
+__all__ = ["FeatureGenerator", "SearchHistoryDrivenCrossover", "SourceMutator"]
