@@ -49,10 +49,24 @@ DIAGNOSTIC_CODE_MAP: Dict[str, str] = {
     "E0405": "INJECT_RUST_USE_DECLARATION",
 }
 
-# Extracts a quoted or back-ticked symbol token from a diagnostic message, e.g.
-#   "X" is not defined            -> X
-#   cannot find trait `Foo` ...   -> Foo
-#   Import "bar.baz" could not ... -> bar.baz
+# Per-delimiter extractors. Matching each delimiter family independently is the
+# key to surviving *nested* delimiters (e.g. a backtick token that itself
+# contains a quote): we never let a quote inside a backticked span terminate the
+# backtick match, which the old single combined character class did.
+#   rust-analyzer / rustc : cannot find value `x` in `Foo`     -> x   (backtick)
+#   Pyright               : "bar.baz" is not defined           -> bar.baz (dquote)
+#   clangd                : use of undeclared identifier 'foo'  -> foo (squote)
+_DELIMITER_PATTERNS = (
+    re.compile(r"`([^`]+)`"),      # rust-analyzer / rustc (highest priority)
+    re.compile(r'"([^"]+)"'),      # Pyright
+    re.compile(r"'([^']+)'"),      # clangd / gcc
+)
+
+# A token that *looks like* a code symbol or dotted/scoped path. Used to skip
+# quoted prose ("could not be resolved") and pick the real identifier.
+_SYMBOL_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:[.:]{1,2}[A-Za-z_][A-Za-z0-9_]*)*$")
+
+# Retained for backward compatibility with external callers/tests.
 _SYMBOL_PATTERN = re.compile(r"[\"'`]([^\"'`]+)[\"'`]")
 
 
@@ -192,15 +206,29 @@ class LspDiagnosticRefluxBinder:
     def extract_symbol(message: str) -> Optional[str]:
         """Extract the offending symbol token from a diagnostic message string.
 
-        Pulls the first quoted/back-ticked token (the convention used by Pyright
-        and rustc). Returns ``None`` when no token can be isolated.
+        Robust across Pyright (double quotes), rust-analyzer/rustc (backticks)
+        and clangd/gcc (single quotes), including messages that mix or *nest*
+        delimiters. Each delimiter family is scanned independently (so a quote
+        inside a backticked span can never truncate the backtick token), and the
+        first candidate that looks like a real identifier/path wins. If no
+        candidate looks like a symbol, the first quoted token is returned as a
+        best-effort fallback. Returns ``None`` when nothing can be isolated.
         """
         if not message:
             return None
-        match = _SYMBOL_PATTERN.search(message)
-        if match:
-            return match.group(1).strip() or None
-        return None
+
+        first_fallback: Optional[str] = None
+        for pattern in _DELIMITER_PATTERNS:
+            for raw in pattern.findall(message):
+                token = raw.strip()
+                if not token:
+                    continue
+                if first_fallback is None:
+                    first_fallback = token
+                # Prefer a clean identifier/dotted-path token over quoted prose.
+                if _SYMBOL_TOKEN.match(token):
+                    return token
+        return first_fallback
 
     @staticmethod
     def _uri_to_path(uri: str) -> str:

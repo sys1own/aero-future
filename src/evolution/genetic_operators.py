@@ -82,33 +82,63 @@ class MutationEngine:
         """Return the workspace path unchanged (mutations are config-level, not source-level)."""
         return workspace
 
+    @staticmethod
+    def _sample(spec: Any) -> Any:
+        """Draw one value from a gene *spec*, supporting both schema dialects.
+
+        Accepts either the legacy ``{"range": [lo, hi], "step": s}`` form or the
+        unified ``{"min": lo, "max": hi, "step": s, "type": "int"|"float",
+        "choices": [...]}`` schema shared with ``evolve.py``. A bare list is a
+        categorical gene; any other scalar is returned verbatim. Returns ``None``
+        when the spec carries no sampleable range so the caller can skip it.
+        """
+        if isinstance(spec, list):
+            return random.choice(spec) if spec else None
+        if not isinstance(spec, dict):
+            return spec
+
+        if spec.get("choices"):
+            return random.choice(list(spec["choices"]))
+
+        # Resolve bounds from either dialect.
+        if "range" in spec:
+            low, high = spec["range"]
+        elif "min" in spec and "max" in spec:
+            low, high = spec["min"], spec["max"]
+        else:
+            return None
+
+        gene_type = spec.get("type") or ("int" if isinstance(low, int) and isinstance(high, int) else "float")
+        step = spec.get("step")
+        if gene_type == "float":
+            if step:
+                ticks = max(int(round((high - low) / step)), 0)
+                return low + random.randint(0, ticks) * step
+            return random.uniform(low, high)
+        # Integer / discrete-stepped gene.
+        istep = max(int(step or 1), 1)
+        values = list(range(int(low), int(high) + 1, istep))
+        return random.choice(values) if values else spec.get("default", low)
+
     def mutate(self, genome: Dict[str, Any]) -> Dict[str, Any]:
         mutated = copy.deepcopy(genome)
         for key, spec in self.mutation_vectors.items():
             if random.random() > self.mutation_rate:
                 continue
-            if isinstance(spec, dict) and "range" in spec:
-                low, high = spec["range"]
-                step = spec.get("step", 1)
-                values = list(range(low, high + 1, step))
-                if values:
-                    mutated[key] = random.choice(values)
-            elif isinstance(spec, list) and spec:
-                mutated[key] = random.choice(spec)
+            sampled = self._sample(spec)
+            if sampled is not None:
+                mutated[key] = sampled
         return mutated
 
     def generate_random(self) -> Dict[str, Any]:
         genome: Dict[str, Any] = {}
         for key, spec in self.mutation_vectors.items():
-            if isinstance(spec, dict) and "range" in spec:
-                low, high = spec["range"]
-                step = spec.get("step", 1)
-                values = list(range(low, high + 1, step))
-                genome[key] = random.choice(values) if values else spec.get("default", low)
-            elif isinstance(spec, list) and spec:
-                genome[key] = random.choice(spec)
+            sampled = self._sample(spec)
+            if sampled is not None:
+                genome[key] = sampled
             else:
-                genome[key] = spec
+                # Opaque scalar gene: carry its default (dict) or value (scalar).
+                genome[key] = spec.get("default") if isinstance(spec, dict) else spec
         return genome
 
 

@@ -1,13 +1,46 @@
-import sys
+"""Aero Future self-evolution driver.
+
+This module runs the multi-generational genetic optimization loop. It is built
+around four design pillars (see the project refactor directives):
+
+1. **Schema-driven genome** -- every tunable parameter is declared in the
+   blueprint under ``[evolution.genome.<name>]`` with its type, bounds, step and
+   default. The genome is a plain ``dict`` keyed by parameter name; crossover and
+   mutation iterate the schema, never positional list indices.
+2. **Deterministic benchmarking** -- :func:`measure_performance` runs the real
+   test/benchmark suite declared in the blueprint and derives metrics from it,
+   degrading gracefully to a safe ``REVERTED`` structure on any failure.
+3. **Self-healing source mutation** -- mutated files are routed through the
+   :class:`orchestrator.AeroCoreExecutionOrchestrator` self-healing pipeline
+   (syntactic recovery + dependency reflux + atomic promotion) before the loop
+   decides to roll a generation back.
+4. **Structured TOML edits** -- blueprint reads/writes preserve the document's
+   structure and comments instead of doing fragile whole-line surgery.
+"""
+
+from __future__ import annotations
+
 import os
+import re
+import sys
 import json
 import random
-import subprocess
 import hashlib
-import numpy as np
-from typing import Dict, Any, List, Tuple, Optional
+import logging
+import subprocess
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
-# Import optional modules
+import numpy as np
+
+try:  # Python 3.11+ stdlib TOML reader
+    import tomllib  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback for <3.11
+    import tomli as tomllib  # type: ignore
+
+logger = logging.getLogger("aero.evolve")
+
+# --- Optional subsystems (import defensively; degrade if unavailable) ------
 try:
     from aero.optimization.spatial_index import VPTree
 except ImportError:
@@ -28,397 +61,783 @@ try:
 except ImportError:
     FeatureGenerator = None
 
-# Causal inference, EHEL, MTBO (optional)
 try:
     from builder_brains.causal_inference import estimate_causal_effect
 except ImportError:
     estimate_causal_effect = None
 
+# Self-healing pipeline (directive #3). Imported lazily-safe: a missing
+# orchestrator must not stop the evolution loop from running.
 try:
-    from builder_brains.ehel import global_alignment
-except ImportError:
-    global_alignment = None
+    from orchestrator import AeroCoreExecutionOrchestrator
+except Exception:  # noqa: BLE001 - orchestrator pulls heavy optional deps
+    AeroCoreExecutionOrchestrator = None  # type: ignore
 
-try:
-    from builder_brains.multi_task_bo import multi_task_gp
-except ImportError:
-    multi_task_gp = None
 
-# ------------------------------------------------------------------
-# Helper functions
-# ------------------------------------------------------------------
-def extract_blueprint_params(blueprint_path: str) -> List[float]:
-    params = []
+# ===========================================================================
+# 1. Schema-driven genome
+# ===========================================================================
+@dataclass
+class ParameterSpec:
+    """Typed metadata governing a single genome parameter.
+
+    Parsed verbatim from a ``[evolution.genome.<name>]`` blueprint table so the
+    bounds, type and storage location all live in one declarative place.
+    """
+
+    name: str
+    path: str            # dotted TOML location where the value is read/written
+    type: str            # "float" | "int" | "str"
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    step: Optional[float] = None
+    default: Any = None
+    choices: Optional[List[Any]] = None
+
+    def coerce(self, value: Any) -> Any:
+        """Coerce *value* to this parameter's declared type."""
+        try:
+            if self.type == "int":
+                return int(round(float(value)))
+            if self.type == "float":
+                return float(value)
+            return str(value)
+        except (TypeError, ValueError):
+            return self.default
+
+    def clamp(self, value: Any) -> Any:
+        """Coerce and clamp *value* into the declared inclusive bounds."""
+        value = self.coerce(value)
+        if self.type in ("int", "float"):
+            if self.minimum is not None:
+                value = max(value, self.coerce(self.minimum))
+            if self.maximum is not None:
+                value = min(value, self.coerce(self.maximum))
+        if self.choices and value not in self.choices:
+            # Snap categorical values back to the nearest legal choice.
+            return self.default if self.default in self.choices else self.choices[0]
+        return value
+
+    def random_value(self) -> Any:
+        """Draw a fresh random value respecting type, bounds and choices."""
+        if self.choices:
+            return random.choice(self.choices)
+        if self.type == "int":
+            lo = int(self.minimum if self.minimum is not None else 0)
+            hi = int(self.maximum if self.maximum is not None else lo + 1)
+            return random.randint(lo, max(lo, hi))
+        if self.type == "float":
+            lo = float(self.minimum if self.minimum is not None else 0.0)
+            hi = float(self.maximum if self.maximum is not None else lo + 1.0)
+            return random.uniform(lo, hi)
+        return self.default
+
+
+# Fallback schema used when a blueprint omits [evolution.genome.*]. Keeps the
+# loop fully operational on legacy blueprints without any hardcoded indexing.
+_DEFAULT_SCHEMA: List[ParameterSpec] = [
+    ParameterSpec("target_accuracy_floor", "cortex.target_accuracy_floor", "float", 0.995, 0.9999, 0.0001, 0.995),
+    ParameterSpec("cycles", "cortex.cycles", "int", 5, 20, 1, 11),
+    ParameterSpec("population_size", "cortex.nsga2.population_size", "int", 5, 50, 1, 28),
+    ParameterSpec("mutation_rate", "cortex.nsga2.mutation_rate", "float", 0.05, 0.25, 0.001, 0.101),
+    ParameterSpec("crossover_rate", "cortex.nsga2.crossover_rate", "float", 0.50, 0.95, 0.001, 0.678),
+]
+
+
+def load_genome_schema(blueprint_path: str) -> List[ParameterSpec]:
+    """Parse ``[evolution.genome.*]`` tables into an ordered list of specs.
+
+    Falls back to :data:`_DEFAULT_SCHEMA` when the blueprint cannot be read or
+    declares no genome, so the loop never crashes on an older blueprint.
+    """
     try:
-        with open(blueprint_path, "r") as f:
-            lines = f.readlines()
-        for line in lines:
-            if "=" in line and any(c.isdigit() for c in line):
-                key, val = line.split("=", 1)
-                try:
-                    num = float(val.strip().strip(",").strip('"'))
-                    params.append(num)
-                except:
-                    pass
-    except:
-        pass
-    while len(params) < 5:
-        params.append(0.0)
-    return params[:5]
+        with open(blueprint_path, "rb") as handle:
+            doc = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        logger.warning("Cannot parse blueprint %s (%s); using default genome schema", blueprint_path, exc)
+        return list(_DEFAULT_SCHEMA)
 
-def apply_parameter_mutation(params: List[float]) -> List[float]:
-    new_params = params.copy()
-    for i in range(len(new_params)):
-        if random.random() < 0.3:
-            new_params[i] += random.gauss(0, 0.05 * abs(new_params[i] + 1e-6))
-            if i == 0:
-                new_params[i] = max(0.995, min(0.9999, new_params[i]))
-            elif i == 3:
-                new_params[i] = max(0.05, min(0.25, new_params[i]))
-    return new_params
+    genome = (doc.get("evolution") or {}).get("genome") or {}
+    specs: List[ParameterSpec] = []
+    for name, meta in genome.items():
+        if not isinstance(meta, dict):
+            continue
+        specs.append(
+            ParameterSpec(
+                name=name,
+                path=str(meta.get("path", f"cortex.{name}")),
+                type=str(meta.get("type", "float")),
+                minimum=meta.get("min"),
+                maximum=meta.get("max"),
+                step=meta.get("step"),
+                default=meta.get("default"),
+                choices=list(meta["choices"]) if isinstance(meta.get("choices"), list) else None,
+            )
+        )
+    return specs or list(_DEFAULT_SCHEMA)
 
-def apply_biased_mutation(params: List[float], importance: Optional[np.ndarray] = None) -> List[float]:
-    new_params = params.copy()
-    base_rate = 0.3
-    for i in range(len(new_params)):
-        if importance is not None and i < len(importance):
-            rate = base_rate * (1 + abs(importance[i]) * 2)
+
+def random_genome(schema: List[ParameterSpec]) -> Dict[str, Any]:
+    """Build a fresh random genome (a name->value dict) from the schema."""
+    return {spec.name: spec.random_value() for spec in schema}
+
+
+def mutate_genome(
+    genome: Dict[str, Any],
+    schema: List[ParameterSpec],
+    base_rate: float = 0.3,
+    importance: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """Mutate a genome by iterating the schema (no positional indexing).
+
+    Numeric genes get a Gaussian nudge scaled by their declared ``step`` (or a
+    fraction of their magnitude) and are clamped to bounds. Per-parameter
+    mutation probability can be biased by a causal-importance map.
+    """
+    child = dict(genome)
+    for spec in schema:
+        rate = base_rate
+        if importance and spec.name in importance:
+            rate = min(0.95, base_rate * (1.0 + abs(importance[spec.name]) * 2.0))
+        if random.random() >= rate:
+            continue
+
+        current = child.get(spec.name, spec.default)
+        if spec.choices:
+            child[spec.name] = random.choice(spec.choices)
+            continue
+        if spec.type in ("int", "float"):
+            scale = float(spec.step) if spec.step else max(abs(float(current or 0)) * 0.05, 1e-6)
+            nudged = float(current or 0) + random.gauss(0.0, max(scale, 1e-9))
+            child[spec.name] = spec.clamp(nudged)
         else:
-            rate = base_rate
-        if random.random() < rate:
-            new_params[i] += random.gauss(0, 0.05 * abs(new_params[i] + 1e-6))
-            if i == 0:
-                new_params[i] = max(0.995, min(0.9999, new_params[i]))
-            elif i == 3:
-                new_params[i] = max(0.05, min(0.25, new_params[i]))
-    return new_params
-
-def crossover(p1: List[float], p2: List[float]) -> List[float]:
-    child = []
-    for a, b in zip(p1, p2):
-        child.append(a if random.random() < 0.5 else b)
+            child[spec.name] = spec.default
     return child
 
-# ------------------------------------------------------------------
-# Cryptographic Ledger
-# ------------------------------------------------------------------
+
+def crossover_genomes(
+    parent_a: Dict[str, Any],
+    parent_b: Dict[str, Any],
+    schema: List[ParameterSpec],
+) -> Dict[str, Any]:
+    """Uniform crossover that iterates schema keys (no list slicing)."""
+    child: Dict[str, Any] = {}
+    for spec in schema:
+        a = parent_a.get(spec.name, spec.default)
+        b = parent_b.get(spec.name, spec.default)
+        child[spec.name] = a if random.random() < 0.5 else b
+    return child
+
+
+def genome_signature(genome: Dict[str, Any], schema: List[ParameterSpec]) -> Tuple:
+    """A hashable, rounded fingerprint of a genome for de-duplication."""
+    sig = []
+    for spec in schema:
+        value = genome.get(spec.name, spec.default)
+        if spec.type in ("int", "float"):
+            sig.append(round(float(value), 3))
+        else:
+            sig.append(value)
+    return tuple(sig)
+
+
+# ===========================================================================
+# 4. Structured TOML read / write (directive #4)
+# ===========================================================================
+def _format_toml_value(value: Any) -> str:
+    """Render *value* as a TOML literal."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        # Compact but lossless-enough representation.
+        return repr(round(value, 6))
+    return '"' + str(value).replace('"', '\\"') + '"'
+
+
+def _read_toml_path(doc: Dict[str, Any], dotted_path: str) -> Any:
+    """Read a nested value from a parsed TOML document by dotted path."""
+    node: Any = doc
+    for part in dotted_path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _set_toml_value(text: str, dotted_path: str, value: Any) -> str:
+    """Return *text* with the value at *dotted_path* replaced in-place.
+
+    This is a surgical, comment-preserving updater: it locates the owning
+    ``[section]`` (supporting dotted section names like ``cortex.nsga2``) and
+    rewrites only the target ``key = ...`` line. Everything else -- comments,
+    blank lines, ordering -- is preserved byte-for-byte. If the key (or its
+    section) is absent it is appended, so the function is total.
+    """
+    *section_parts, key = dotted_path.split(".")
+    section = ".".join(section_parts)
+    literal = _format_toml_value(value)
+
+    lines = text.splitlines(keepends=True)
+    out: List[str] = []
+    in_section = section == ""  # top-level keys have no [section]
+    section_seen = in_section
+    replaced = False
+    key_re = re.compile(r"^(\s*)" + re.escape(key) + r"(\s*=\s*)(.*)$")
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            header = stripped[1:-1].strip()
+            in_section = header == section
+            section_seen = section_seen or in_section
+            out.append(line)
+            continue
+        if in_section and not replaced:
+            match = key_re.match(line.rstrip("\n"))
+            if match:
+                newline = "\n" if line.endswith("\n") else ""
+                out.append(f"{match.group(1)}{key}{match.group(2)}{literal}{newline}")
+                replaced = True
+                continue
+        out.append(line)
+
+    if replaced:
+        return "".join(out)
+
+    # Key not found: append (creating the section header if needed).
+    result = "".join(out)
+    if not result.endswith("\n") and result:
+        result += "\n"
+    if section and not section_seen:
+        result += f"\n[{section}]\n"
+    result += f"{key} = {literal}\n"
+    return result
+
+
+def extract_blueprint_params(blueprint_path: str, schema: Optional[List[ParameterSpec]] = None) -> Dict[str, Any]:
+    """Read the current genome values from the blueprint via structured TOML.
+
+    Returns a name->value dict. Missing values fall back to the schema default.
+    Replaces the old positional, string-split parser.
+    """
+    schema = schema or load_genome_schema(blueprint_path)
+    try:
+        with open(blueprint_path, "rb") as handle:
+            doc = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        doc = {}
+    genome: Dict[str, Any] = {}
+    for spec in schema:
+        raw = _read_toml_path(doc, spec.path)
+        genome[spec.name] = spec.clamp(raw) if raw is not None else spec.default
+    return genome
+
+
+def write_params_to_blueprint(
+    blueprint_path: str,
+    genome: Dict[str, Any],
+    schema: Optional[List[ParameterSpec]] = None,
+) -> None:
+    """Write a genome back into the blueprint, preserving structure & comments.
+
+    Each value is written to the ``path`` declared in its schema entry using the
+    surgical TOML updater, then the whole document is re-validated by parsing it
+    again; an unparyseable result is discarded rather than corrupting the file.
+    """
+    schema = schema or load_genome_schema(blueprint_path)
+    try:
+        with open(blueprint_path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        logger.error("Cannot read blueprint for write: %s", exc)
+        return
+
+    updated = text
+    for spec in schema:
+        if spec.name in genome:
+            updated = _set_toml_value(updated, spec.path, spec.clamp(genome[spec.name]))
+
+    # Validate before committing: never leave a corrupt blueprint behind.
+    try:
+        tomllib.loads(updated)
+    except tomllib.TOMLDecodeError as exc:
+        logger.error("Refusing to write malformed blueprint (%s); keeping original", exc)
+        return
+
+    with open(blueprint_path, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+
+
+def read_blueprint_setting(blueprint_path: str, dotted_path: str) -> Any:
+    """Structured read of any blueprint setting by dotted path."""
+    try:
+        with open(blueprint_path, "rb") as handle:
+            doc = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return _read_toml_path(doc, dotted_path)
+
+
+# ===========================================================================
+# 2. Deterministic performance evaluation (directive #2)
+# ===========================================================================
+def _safe_metrics(status: str = "REVERTED") -> Dict[str, float]:
+    """A safe, neutral metrics structure used when benchmarking cannot run."""
+    return {
+        "execution_time": 0.0,
+        "speed_gain": 0.0,
+        "size_reduction": 0.0,
+        "accuracy_delta": 0.0,
+        "clarity_delta": 0.0,
+        "tests_passed": 0,
+        "tests_total": 0,
+        "status": status,
+    }
+
+
+def _measure_workspace_size(workspace: str) -> int:
+    """Total bytes of tracked Python source -- a proxy for build size."""
+    total = 0
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".aero")]
+        for name in files:
+            if name.endswith(".py"):
+                try:
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    pass
+    return total
+
+
+def measure_performance(
+    workspace: str,
+    blueprint_path: str,
+    baseline_size: Optional[int] = None,
+) -> Dict[str, float]:
+    """Run the real benchmark/test suite and derive deterministic metrics.
+
+    The suite is taken from ``[evolution] test_suite`` in the blueprint. It is
+    executed under a timeout; latency, test pass-ratio and workspace-size deltas
+    are computed from the actual run. Any failure (missing suite, non-zero exit,
+    timeout, exception) degrades gracefully to a safe ``REVERTED`` structure so
+    the evolution loop never crashes.
+    """
+    import time
+
+    suite = read_blueprint_setting(blueprint_path, "evolution.test_suite")
+    metrics = _safe_metrics(status="PASSED")
+    current_size = _measure_workspace_size(workspace)
+    if baseline_size:
+        metrics["size_reduction"] = max(0.0, (baseline_size - current_size) / baseline_size * 100.0)
+
+    command = _resolve_benchmark_command(workspace, suite)
+    if command is None:
+        # No runnable suite configured: fall back to a self-check of the engine
+        # (import + compile of main.py) so we still get a real pass/fail signal.
+        command = [sys.executable, "-c", "import py_compile,glob,sys; "
+                   "[py_compile.compile(f, doraise=True) for f in glob.glob('*.py')]"]
+
+    start = time.perf_counter()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Benchmark timed out; marking generation REVERTED")
+        return _safe_metrics(status="REVERTED")
+    except Exception as exc:  # noqa: BLE001 - never let benchmarking crash the loop
+        logger.warning("Benchmark execution failed (%s); marking REVERTED", exc)
+        return _safe_metrics(status="REVERTED")
+
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    metrics["execution_time"] = round(elapsed_ms, 3)
+
+    passed, total = _parse_test_counts(result.stdout + "\n" + result.stderr)
+    metrics["tests_passed"] = passed
+    metrics["tests_total"] = total
+
+    if result.returncode != 0:
+        # A failing suite is a regression: negative speed gain triggers rollback.
+        metrics["status"] = "REVERTED"
+        metrics["speed_gain"] = -abs(metrics.get("speed_gain", 0.0)) - 5.0
+        metrics["accuracy_delta"] = -1.0 if total else 0.0
+        return metrics
+
+    # Lower latency than a nominal budget => positive speed gain signal.
+    budget_ms = float(read_blueprint_setting(blueprint_path, "resources.timeout_seconds") or 120) * 10.0
+    metrics["speed_gain"] = round((budget_ms - elapsed_ms) / max(budget_ms, 1.0) * 100.0, 4)
+    metrics["accuracy_delta"] = round((passed / total) if total else 0.0, 4)
+    metrics["status"] = "PASSED"
+    return metrics
+
+
+def _resolve_benchmark_command(workspace: str, suite: Any) -> Optional[List[str]]:
+    """Resolve the configured test_suite into a runnable command, or None."""
+    if not suite:
+        return None
+    suite = str(suite)
+    suite_path = suite if os.path.isabs(suite) else os.path.join(workspace, suite)
+    if not os.path.exists(suite_path):
+        return None
+    if suite_path.endswith(".sh"):
+        return ["bash", suite_path]
+    if suite_path.endswith(".py"):
+        return [sys.executable, suite_path]
+    # A directory or pytest target: run pytest against it.
+    return [sys.executable, "-m", "pytest", "-q", suite_path]
+
+
+_TEST_COUNT_RE = re.compile(r"(\d+)\s+passed(?:.*?(\d+)\s+failed)?", re.IGNORECASE)
+
+
+def _parse_test_counts(output: str) -> Tuple[int, int]:
+    """Extract (passed, total) from typical test-runner output; (0,0) if none."""
+    match = _TEST_COUNT_RE.search(output or "")
+    if not match:
+        return 0, 0
+    passed = int(match.group(1))
+    failed = int(match.group(2)) if match.group(2) else 0
+    return passed, passed + failed
+
+
+# ===========================================================================
+# Cryptographic block-universe ledger
+# ===========================================================================
 class CryptographicLedger:
+    """Append-only ledger of every evaluated genome (the block universe)."""
+
     def __init__(self, path: str):
         self.path = path
         self._load()
-    
-    def _load(self):
+
+    def _load(self) -> None:
         if os.path.exists(self.path):
-            with open(self.path, "r") as f:
-                self.data = json.load(f)
+            try:
+                with open(self.path, "r", encoding="utf-8") as handle:
+                    self.data = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                self.data = {"mutation_history": []}
         else:
             self.data = {"mutation_history": []}
-    
-    def verify_integrity(self) -> bool:
-        return True
-    
-    def read_chain(self) -> List[Dict]:
+
+    def read_chain(self) -> List[Dict[str, Any]]:
         return self.data.get("mutation_history", [])
-    
-    def append_entry(self, params: List[float], metrics: Dict, source_hash: str) -> None:
+
+    def verify_integrity(self) -> bool:
+        """Verify the hash chain links each entry to its predecessor."""
+        prev = ""
+        for entry in self.read_chain():
+            expected = entry.get("prev_hash", "")
+            if expected != prev:
+                return False
+            prev = entry.get("mutation_id", "")
+        return True
+
+    def append_entry(self, genome: Dict[str, Any], metrics: Dict[str, Any], source_hash: str) -> None:
+        import time
+
+        history = self.data.setdefault("mutation_history", [])
+        prev_hash = history[-1]["mutation_id"] if history else ""
+        payload = json.dumps(genome, sort_keys=True) + source_hash + prev_hash
+        mutation_id = hashlib.sha256(payload.encode()).hexdigest()[:16]
+        status = metrics.get("status")
+        if status is None:
+            status = "PASSED" if metrics.get("speed_gain", 0) >= 0 else "REVERTED"
         entry = {
-            "generation": len(self.data.get("mutation_history", [])) + 1,
-            "timestamp": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
-            "mutation_id": hashlib.sha256(str(params).encode()).hexdigest()[:16],
-            "parameters": params,
+            "generation": len(history) + 1,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "mutation_id": mutation_id,
+            "prev_hash": prev_hash,
+            "parameters": genome,
             "metrics": metrics,
             "source_hash": source_hash,
-            "verification_status": "PASSED" if metrics.get("speed_gain", 0) >= 0 else "REVERTED"
+            "verification_status": status,
         }
-        self.data.setdefault("mutation_history", []).append(entry)
-        with open(self.path, "w") as f:
-            json.dump(self.data, f, indent=2)
+        history.append(entry)
+        try:
+            with open(self.path, "w", encoding="utf-8") as handle:
+                json.dump(self.data, handle, indent=2)
+        except OSError as exc:
+            logger.error("Failed to persist ledger: %s", exc)
 
-# ------------------------------------------------------------------
-# Build and benchmark functions
-# ------------------------------------------------------------------
+
+# ===========================================================================
+# Build + self-healing integration (directive #3)
+# ===========================================================================
 def execute_build(workspace: str) -> bool:
+    """Run a build of the workspace, returning success."""
     try:
         result = subprocess.run(
             [sys.executable, "main.py", "build", "--workspace", workspace, "--blueprint", "self_host.aero"],
+            cwd=workspace,
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=180,
         )
         if result.returncode != 0:
-            print("Build failed with stderr:")
-            print(result.stderr)
+            logger.debug("Build failed: %s", (result.stderr or "")[:500])
         return result.returncode == 0
-    except Exception as e:
-        print(f"Build failed: {e}")
+    except subprocess.TimeoutExpired:
+        logger.warning("Build timed out")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Build raised: %s", exc)
         return False
 
-def measure_performance() -> Dict[str, float]:
-    return {
-        "execution_time": random.uniform(100, 200),
-        "speed_gain": random.uniform(-5, 15),
-        "size_reduction": random.uniform(0, 10),
-        "accuracy_delta": 0.0,
-        "clarity_delta": 0.0
-    }
 
-def write_params_to_blueprint(blueprint_path: str, params: List[float]) -> None:
-    with open(blueprint_path, "r") as f:
-        lines = f.readlines()
-    
-    param_names = ["target_accuracy_floor", "cycles", "population_size", "mutation_rate", "crossover_rate"]
-    new_lines = []
-    for line in lines:
-        for i, name in enumerate(param_names):
-            if name in line and i < len(params):
-                if i == 0:
-                    new_lines.append(f"target_accuracy_floor = {params[i]:.4f}\n")
-                elif i == 1:
-                    new_lines.append(f"cycles = {int(params[i])}\n")
-                elif i == 2:
-                    new_lines.append(f"population_size = {int(params[i])}\n")
-                elif i == 3:
-                    new_lines.append(f"mutation_rate = {params[i]:.3f}\n")
-                elif i == 4:
-                    new_lines.append(f"crossover_rate = {params[i]:.3f}\n")
-                break
-        else:
-            new_lines.append(line)
-    with open(blueprint_path, "w") as f:
-        f.writelines(new_lines)
+def _build_healing_orchestrator(workspace: str):
+    """Construct an AeroCoreExecutionOrchestrator for Python self-healing.
 
-# ------------------------------------------------------------------
-# Read blueprint setting
-# ------------------------------------------------------------------
-def read_blueprint_setting(blueprint_path: str, section: str, key: str) -> Optional[str]:
+    Returns ``None`` when the orchestrator or its tree-sitter backend is
+    unavailable, so callers degrade to a plain rollback.
+    """
+    if AeroCoreExecutionOrchestrator is None:
+        return None
+    language = parser = None
     try:
-        with open(blueprint_path, "r") as f:
-            lines = f.readlines()
-        in_section = False
-        for line in lines:
-            if line.strip().startswith("[") and line.strip().endswith("]"):
-                in_section = (line.strip() == f"[{section}]")
-                continue
-            if in_section and "=" in line:
-                k, v = line.split("=", 1)
-                if k.strip() == key:
-                    return v.strip()
-    except:
-        pass
-    return None
+        from core.parser.universal import load_language
+        from tree_sitter import Parser
 
-# ------------------------------------------------------------------
-# Main evolution loop
-# ------------------------------------------------------------------
-def execute_evolution_loop(workspace: str, max_generations: int, population_size: int = 10) -> None:
-    blueprint_path = os.path.join(workspace, "self_host.aero")
-    ledger = CryptographicLedger(os.path.join(workspace, "context.aero"))
-    
-    history = ledger.read_chain()
-    print(f"Loaded {len(history)} historical entries")
-    
-    # --- Generate missing features ---
-    if FeatureGenerator:
-        gen = FeatureGenerator(workspace, blueprint_path)
-        gen_result = gen.generate_features()
-        if gen_result["generated"]:
-            print(f"Generated features: {gen_result['generated']}")
-        if gen_result["errors"]:
-            print(f"Errors: {gen_result['errors']}")
-    
-    # --- Causal Inference: estimate parameter importance ---
-    importance = None
-    if estimate_causal_effect and len(history) > 20:
+        language = load_language("python")
+        parser = Parser(language)
+    except Exception as exc:  # noqa: BLE001 - recovery step is optional
+        logger.debug("Tree-sitter recovery unavailable for healing: %s", exc)
+    try:
+        return AeroCoreExecutionOrchestrator(
+            workspace, language=language, parser=parser, language_name="python"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not build healing orchestrator: %s", exc)
+        return None
+
+
+def heal_mutated_files(workspace: str, files: List[str]) -> Dict[str, Any]:
+    """Route mutated files through the self-healing pipeline before rollback.
+
+    Each file is staged, repaired (syntactic recovery + dependency reflux) and,
+    if it verifies, atomically promoted by the orchestrator. Returns a report
+    keyed by relative path.
+    """
+    orchestrator = _build_healing_orchestrator(workspace)
+    report: Dict[str, Any] = {"healed": [], "failed": [], "available": orchestrator is not None}
+    if orchestrator is None:
+        return report
+    for path in files:
+        rel = os.path.relpath(path, workspace) if os.path.isabs(path) else path
         try:
-            X = np.array([entry["parameters"] for entry in history if "parameters" in entry])
-            y = np.array([entry["metrics"].get("speed_gain", 0) for entry in history if "parameters" in entry])
-            if len(X) > 0 and len(X) == len(y):
-                importance = np.abs(np.corrcoef(X.T, y)[:X.shape[1], -1])
-                print(f"Parameter importance: {importance.tolist()}")
-        except:
-            importance = None
-    
-    # Use a set of rounded parameter tuples to avoid duplicates
-    explored_params = set()
+            result = orchestrator.process_target_file(rel)
+        except Exception as exc:  # noqa: BLE001 - healing must never crash the loop
+            logger.warning("Self-heal raised on %s: %s", rel, exc)
+            report["failed"].append(rel)
+            continue
+        (report["healed"] if result.get("healed") else report["failed"]).append(rel)
+    return report
+
+
+# ===========================================================================
+# Main evolution loop
+# ===========================================================================
+def execute_evolution_loop(workspace: str, max_generations: int, population_size: int = 10) -> None:
+    """Run the schema-driven, self-healing genetic optimization loop."""
+    blueprint_path = os.path.join(workspace, "self_host.aero")
+    schema = load_genome_schema(blueprint_path)
+    ledger = CryptographicLedger(os.path.join(workspace, "context.aero"))
+    history = ledger.read_chain()
+    baseline_size = _measure_workspace_size(workspace)
+
+    logger.info("Loaded %d historical entries; %d genome parameters", len(history), len(schema))
+    print(f"Loaded {len(history)} historical entries across {len(schema)} parameters")
+
+    # --- Generate any missing feature modules from the blueprint ----------
+    if FeatureGenerator:
+        try:
+            gen_result = FeatureGenerator(workspace, blueprint_path).generate_features()
+            if gen_result.get("generated"):
+                print(f"Generated features: {gen_result['generated']}")
+            if gen_result.get("errors"):
+                print(f"Feature generation errors: {gen_result['errors']}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Feature generation failed: %s", exc)
+
+    # --- Causal importance over historical genomes (keyed by name) --------
+    importance: Optional[Dict[str, float]] = None
+    if len(history) > 20:
+        try:
+            names = [s.name for s in schema]
+            X = np.array([[float(h["parameters"].get(n, 0.0)) for n in names]
+                          for h in history if isinstance(h.get("parameters"), dict)])
+            y = np.array([float(h["metrics"].get("speed_gain", 0.0))
+                          for h in history if isinstance(h.get("parameters"), dict)])
+            if len(X) > 1 and X.shape[0] == y.shape[0]:
+                corr = np.abs(np.corrcoef(X.T, y)[:X.shape[1], -1])
+                importance = {n: float(c) for n, c in zip(names, np.nan_to_num(corr))}
+                print(f"Parameter importance: {importance}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Causal importance estimation skipped: %s", exc)
+
+    # --- Visited-region memory + history-driven crossover -----------------
+    explored: set = set()
     for entry in history:
-        if "parameters" in entry:
-            rounded = tuple(round(p, 3) for p in entry["parameters"])
-            explored_params.add(rounded)
-    
-    # Build VP Tree for similarity search (optional)
-    vp_tree = None
-    if VPTree and history:
-        points = [{"parameters": e["parameters"]} for e in history if "parameters" in e]
-        if points:
-            vp_tree = VPTree(points, distance_metric="cosine")
-            print(f"Built VP Tree with {len(points)} points")
-    
-    # Build SHX index from history
+        params = entry.get("parameters")
+        if isinstance(params, dict):
+            explored.add(genome_signature(params, schema))
+
     shx = None
     if SearchHistoryDrivenCrossover and history:
-        shx_points = []
-        for entry in history:
-            if "parameters" in entry and "metrics" in entry:
-                shx_points.append({
-                    "parameters": entry["parameters"],
-                    "metrics": entry["metrics"]
-                })
-        if shx_points:
-            shx = SearchHistoryDrivenCrossover(shx_points, n_clusters=min(5, len(shx_points)))
-            print(f"Built SHX with {len(shx_points)} historical points")
-    
-    # Initialize population
-    current_population = []
-    for _ in range(population_size):
-        params = [
-            random.uniform(0.995, 0.9999),
-            random.randint(5, 20),
-            random.randint(5, 50),
-            random.uniform(0.05, 0.25),
-            random.uniform(0.5, 0.95)
-        ]
-        current_population.append(params)
-    
-    # Force source mutation on
-    source_enabled = True
-    source_rate = 0.8
-    source_targets = ["*.py", "builder_brains/*.py", "aero/*.py", "aero/evolution/*.py"]
-    source_rules = ["insert_function_stub", "add_docstring"]
-    
-    print("Source mutation: FORCED ENABLED")
-    print(f"Source rate: {source_rate}")
-    print(f"Source targets: {source_targets}")
-    
-    for gen in range(1, max_generations + 1):
-        print(f"\n{'='*50}")
-        print(f"Generation {gen}/{max_generations}")
-        print(f"{'='*50}")
-        
-        # --- Generate offspring ---
-        offspring = []
-        if shx:
-            candidate_pool = []
-            for _ in range(population_size * 3):
-                p1, p2 = random.sample(current_population, 2)
-                child = crossover(p1, p2)
-                if importance is not None:
-                    child = apply_biased_mutation(child, importance)
-                else:
-                    child = apply_parameter_mutation(child)
-                candidate_pool.append(np.array(child))
-            selected_offspring = shx.select_offspring(candidate_pool, population_size)
-            offspring = [list(arr) for arr in selected_offspring]
-        else:
-            for _ in range(population_size):
-                parent = random.choice(current_population)
-                child = crossover(parent, random.choice(current_population))
-                if importance is not None:
-                    child = apply_biased_mutation(child, importance)
-                else:
-                    child = apply_parameter_mutation(child)
-                offspring.append(child)
-        
-        # --- Evaluate each offspring ---
-        evaluated = []
-        for params in offspring:
-            rounded = tuple(round(p, 3) for p in params)
-            if rounded in explored_params:
-                print(f"cNrGA: Skipping duplicate/visited region: {params}")
-                # Generate new random candidate
-                params = [
-                    random.uniform(0.995, 0.9999),
-                    random.randint(5, 20),
-                    random.randint(5, 50),
-                    random.uniform(0.05, 0.25),
-                    random.uniform(0.5, 0.95)
-                ]
-                rounded = tuple(round(p, 3) for p in params)
-                if rounded in explored_params:
+        pts = [{"parameters": [float(e["parameters"].get(s.name, 0.0)) for s in schema],
+                "metrics": e.get("metrics", {})}
+               for e in history if isinstance(e.get("parameters"), dict)]
+        if pts:
+            shx = SearchHistoryDrivenCrossover(pts, n_clusters=min(5, len(pts)))
+            print(f"Built SHX index over {len(pts)} historical genomes")
+
+    # --- Initialize population (list of genome dicts) ---------------------
+    population: List[Dict[str, Any]] = [random_genome(schema) for _ in range(population_size)]
+
+    # --- Source mutation configuration (read from the blueprint) ----------
+    source_enabled = bool(read_blueprint_setting(blueprint_path, "source_mutation.enabled"))
+    source_rate = float(read_blueprint_setting(blueprint_path, "source_mutation.mutation_rate") or 0.8)
+    source_targets = read_blueprint_setting(blueprint_path, "source_mutation.target_files") or ["*.py", "builder_brains/*.py"]
+    source_rules = read_blueprint_setting(blueprint_path, "source_mutation.rules") or ["insert_function_stub", "add_docstring"]
+    print(f"Source mutation: {'ENABLED' if source_enabled else 'disabled'} (rate={source_rate})")
+
+    for generation in range(1, max_generations + 1):
+        print(f"\n{'=' * 50}\nGeneration {generation}/{max_generations}\n{'=' * 50}")
+
+        offspring = _produce_offspring(population, schema, population_size, importance, shx)
+        evaluated: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+
+        for genome in offspring:
+            signature = genome_signature(genome, schema)
+            if signature in explored:
+                print(f"cNrGA: skipping visited region {signature}")
+                genome = random_genome(schema)
+                signature = genome_signature(genome, schema)
+                if signature in explored:
                     continue
-            
-            write_params_to_blueprint(blueprint_path, params)
-            with open(blueprint_path, "r") as f:
-                blueprint_backup = f.read()
-            
-            build_success = execute_build(workspace)
-            if not build_success:
-                print(f"Build failed for params {params}. Rolling back.")
-                with open(blueprint_path, "w") as f:
-                    f.write(blueprint_backup)
+
+            # Snapshot the blueprint, apply the candidate, and rebuild.
+            with open(blueprint_path, "r", encoding="utf-8") as handle:
+                blueprint_backup = handle.read()
+            write_params_to_blueprint(blueprint_path, genome, schema)
+
+            if not execute_build(workspace):
+                print(f"Build failed for {signature}; rolling back blueprint")
+                with open(blueprint_path, "w", encoding="utf-8") as handle:
+                    handle.write(blueprint_backup)
                 continue
-            
-            metrics = measure_performance()
-            source_hash = hashlib.sha256("aero_engine".encode()).hexdigest()
-            ledger.append_entry(params, metrics, source_hash)
-            print(f"Evaluated params: {params} -> Metrics: {metrics}")
-            evaluated.append((params, metrics))
-            explored_params.add(rounded)
-            
-            if metrics.get("speed_gain", 0) < -2.0:
-                print("Performance regression detected. Rolling back.")
-                with open(blueprint_path, "w") as f:
-                    f.write(blueprint_backup)
+
+            metrics = measure_performance(workspace, blueprint_path, baseline_size)
+            source_hash = hashlib.sha256(json.dumps(genome, sort_keys=True).encode()).hexdigest()
+            ledger.append_entry(genome, metrics, source_hash)
+            explored.add(signature)
+            print(f"Evaluated {signature} -> speed_gain={metrics['speed_gain']:.2f}% status={metrics['status']}")
+
+            rollback_threshold = float(read_blueprint_setting(blueprint_path, "evolution.rollback_threshold") or 2.0)
+            if metrics["status"] == "REVERTED" or metrics["speed_gain"] < -rollback_threshold:
+                print("Regression detected; rolling back blueprint")
+                with open(blueprint_path, "w", encoding="utf-8") as handle:
+                    handle.write(blueprint_backup)
             else:
-                current_population.append(params)
-        
-        # --- Update population ---
+                evaluated.append((genome, metrics))
+
+        # --- Selection: keep the best genomes by speed gain ---------------
         if evaluated:
-            evaluated.sort(key=lambda x: x[1].get("speed_gain", -float("inf")), reverse=True)
-            best = evaluated[:population_size]
-            current_population = [p for p, _ in best]
+            evaluated.sort(key=lambda gm: gm[1].get("speed_gain", -float("inf")), reverse=True)
+            population = [g for g, _ in evaluated[:population_size]]
+            print(f"Generation {generation} best speed gain: {evaluated[0][1]['speed_gain']:.2f}%")
         else:
-            print("No successful evaluations this generation. Reinitializing population.")
-            current_population = []
-            for _ in range(population_size):
-                params = [
-                    random.uniform(0.995, 0.9999),
-                    random.randint(5, 20),
-                    random.randint(5, 50),
-                    random.uniform(0.05, 0.25),
-                    random.uniform(0.5, 0.95)
-                ]
-                current_population.append(params)
-        
-        # --- Source Mutation (if enabled) ---
-        if source_enabled and evaluated and SourceMutator:
-            print("\n--- Applying source mutation ---")
-            mutator = SourceMutator(source_targets, source_rules, source_rate)
-            mutate_result = mutator.mutate(workspace)
-            if mutate_result["mutated_files"]:
-                print(f"Source mutation applied to: {mutate_result['mutated_files']}")
-                # Rebuild to test mutated source
-                build_success = execute_build(workspace)
-                if not build_success:
-                    print("Source mutation caused build failure. Rolling back.")
-                    mutator.rollback()
-                else:
-                    print("Source mutation build successful. Keeping changes.")
-            else:
-                print("No files mutated this generation.")
-        else:
-            print("Source mutation skipped (disabled or no evaluated).")
-        
-        # Update SHX periodically
-        if gen % 5 == 0 and SearchHistoryDrivenCrossover:
-            shx_points = []
-            for entry in ledger.read_chain():
-                if "parameters" in entry and "metrics" in entry:
-                    shx_points.append({
-                        "parameters": entry["parameters"],
-                        "metrics": entry["metrics"]
-                    })
-            if shx_points:
-                shx = SearchHistoryDrivenCrossover(shx_points, n_clusters=min(5, len(shx_points)))
-                print("SHX rebuilt with latest history.")
-        
-        if evaluated:
-            print(f"Generation {gen} complete. Best speed gain: {best[0][1].get('speed_gain', 0):.2f}%")
-        else:
-            print(f"Generation {gen} complete. No successful evaluations.")
+            print("No successful evaluations; reinitializing population")
+            population = [random_genome(schema) for _ in range(population_size)]
+
+        # --- Source mutation + self-healing (directive #3) ----------------
+        if source_enabled and SourceMutator and evaluated:
+            _run_source_mutation(workspace, source_targets, source_rules, source_rate)
+
+        # Periodically rebuild the SHX index from the freshest history.
+        if shx is not None and generation % 5 == 0 and SearchHistoryDrivenCrossover:
+            pts = [{"parameters": [float(e["parameters"].get(s.name, 0.0)) for s in schema],
+                    "metrics": e.get("metrics", {})}
+                   for e in ledger.read_chain() if isinstance(e.get("parameters"), dict)]
+            if pts:
+                shx = SearchHistoryDrivenCrossover(pts, n_clusters=min(5, len(pts)))
+
+
+def _produce_offspring(
+    population: List[Dict[str, Any]],
+    schema: List[ParameterSpec],
+    population_size: int,
+    importance: Optional[Dict[str, float]],
+    shx: Any,
+) -> List[Dict[str, Any]]:
+    """Generate the next offspring batch via crossover + schema-driven mutation."""
+    if len(population) < 2:
+        return [random_genome(schema) for _ in range(population_size)]
+
+    if shx is not None:
+        # Over-generate, score via SHX, and keep the most promising.
+        pool: List[np.ndarray] = []
+        raw: List[Dict[str, Any]] = []
+        for _ in range(population_size * 3):
+            p1, p2 = random.sample(population, 2)
+            child = mutate_genome(crossover_genomes(p1, p2, schema), schema, importance=importance)
+            raw.append(child)
+            pool.append(np.array([float(child.get(s.name, 0.0)) for s in schema]))
+        selected = shx.select_offspring(pool, population_size)
+        chosen: List[Dict[str, Any]] = []
+        for vec in selected:
+            # Map the selected vector back to its originating genome dict.
+            idx = min(range(len(pool)), key=lambda i: float(np.linalg.norm(pool[i] - np.asarray(vec))))
+            chosen.append(raw[idx])
+        return chosen or raw[:population_size]
+
+    offspring: List[Dict[str, Any]] = []
+    for _ in range(population_size):
+        p1, p2 = random.sample(population, 2)
+        offspring.append(mutate_genome(crossover_genomes(p1, p2, schema), schema, importance=importance))
+    return offspring
+
+
+def _run_source_mutation(workspace: str, targets: List[str], rules: List[str], rate: float) -> None:
+    """Apply source mutation, then self-heal + rebuild before committing.
+
+    Implements directive #3: a mutated build that fails is first routed through
+    the self-healing pipeline; only an unrecoverable failure triggers rollback.
+    """
+    print("\n--- Source mutation ---")
+    mutator = SourceMutator(targets, rules, rate)
+    result = mutator.mutate(workspace)
+    mutated = result.get("mutated_files", [])
+    if not mutated:
+        print("No files mutated this generation.")
+        return
+    print(f"Mutated: {mutated}")
+
+    if execute_build(workspace):
+        print("Mutated build succeeded; keeping changes.")
+        return
+
+    # Build broke: attempt active self-healing on the mutated files.
+    print("Mutated build failed; routing files through self-healing pipeline...")
+    heal_report = heal_mutated_files(workspace, mutated)
+    if heal_report["healed"] and execute_build(workspace):
+        print(f"Self-healing repaired and promoted: {heal_report['healed']}")
+        return
+
+    print("Self-healing could not rescue the mutation; rolling back.")
+    mutator.rollback()
+
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     if len(sys.argv) < 3:
-        print("Usage: python evolve.py <workspace> <max_generations>")
+        print("Usage: python evolve.py <workspace> <max_generations> [population_size]")
         sys.exit(1)
-    pop_size = int(sys.argv[3]) if len(sys.argv) > 3 else 10
-    execute_evolution_loop(sys.argv[1], int(sys.argv[2]), pop_size)
+    pop = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+    execute_evolution_loop(sys.argv[1], int(sys.argv[2]), pop)
