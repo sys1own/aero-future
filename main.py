@@ -628,6 +628,32 @@ def aero_build_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def init_command(args: argparse.Namespace) -> int:
+    """Manually set up a project architecture (workspace + living blueprint)."""
+    from core.environment_bootstrap import RuntimeEnvironmentBootstrapper
+
+    try:
+        report = RuntimeEnvironmentBootstrapper.init_workspace(args.workspace or ".")
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: workspace init failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"  root             : {report['root']}")
+    print(f"  blueprint        : {'seeded' if report['blueprint_created'] else 'preserved'}")
+    print(f"  context.aero     : {'seeded' if report['ledger_created'] else 'present/skip'}")
+    return 0
+
+
+def audit_command(args: argparse.Namespace) -> int:
+    """Run the pre-flight test integrity sweep and self-heal core logic bugs."""
+    from core.test_auditor import PreFlightTestAuditor
+
+    auditor = PreFlightTestAuditor(test_dir=args.test_dir, max_rounds=args.max_rounds)
+    ok = auditor.run_suite_and_heal()
+    if auditor.patched_files:
+        print(f"[+] Self-healing patched {len(auditor.patched_files)} file(s).")
+    return 0 if ok else 1
+
+
 def aero_heal_command(args: argparse.Namespace) -> int:
     """Geometrically re-wire un-terminated edges in a compiled ``.aeroc``."""
     if not os.path.isfile(args.aeroc):
@@ -817,10 +843,56 @@ def create_parser() -> argparse.ArgumentParser:
     p_overlay.add_argument("--workspace", default=".", help="Project root (default: .).")
     p_overlay.set_defaults(handler=commit_overlay_command)
 
+    p_init = sub.add_parser(
+        "init", help="Initialize a project architecture (workspace + living blueprint)."
+    )
+    p_init.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_init.set_defaults(handler=init_command)
+
+    p_audit = sub.add_parser(
+        "audit", help="Run the pre-flight test sweep and self-heal core logic bugs."
+    )
+    p_audit.add_argument("--test-dir", dest="test_dir", default="tests", help="Test directory.")
+    p_audit.add_argument(
+        "--max-rounds", dest="max_rounds", type=int, default=3,
+        help="Maximum self-healing patch/re-run rounds.",
+    )
+    p_audit.set_defaults(handler=audit_command)
+
     return parser
 
 
+_BOOTSTRAP_DONE = False
+
+
+def _maybe_bootstrap() -> None:
+    """Run the lightweight pre-flight bootstrap, unless under test/CI.
+
+    Provisions missing dependencies and seeds a default ``blueprint.aero`` so a
+    fresh user is never halted by a missing pip library or absent workspace.
+    Skipped when a test runner is active, when explicitly disabled, or once it
+    has already completed -- so it is safe at the top of every command.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if os.environ.get("AERO_DISABLE_BOOTSTRAP") or os.environ.get("AERO_AUDIT_ACTIVE"):
+        return
+    if "unittest" in sys.modules or "pytest" in sys.modules:
+        return
+    try:
+        from core.environment_bootstrap import RuntimeEnvironmentBootstrapper
+
+        RuntimeEnvironmentBootstrapper.verify_and_bootstrap()
+    except Exception as exc:  # noqa: BLE001 - never let bootstrap crash the CLI
+        print(f"[-] Bootstrap warning (continuing): {exc}", file=sys.stderr)
+    _BOOTSTRAP_DONE = True
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Force environment + workspace stability before any command runs.
+    _maybe_bootstrap()
+
     args = create_parser().parse_args(list(argv) if argv is not None else None)
     handler = getattr(args, "handler", None)
     if handler is None:
@@ -829,5 +901,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return int(handler(args))
 
 
+def cli_entry(argv: Optional[Sequence[str]] = None) -> int:
+    """Hardened process entry point: bootstrap, optional pre-flight audit,
+    dispatch -- with all errors trapped into elegant, actionable guidance
+    instead of bare Python stack traces.
+    """
+    try:
+        from core.environment_bootstrap import RuntimeEnvironmentBootstrapper
+
+        RuntimeEnvironmentBootstrapper.verify_and_bootstrap()
+        global _BOOTSTRAP_DONE
+        _BOOTSTRAP_DONE = True
+
+        # Opt-in full pre-flight self-healing audit (AERO_PREFLIGHT=1).  Kept
+        # opt-in so routine commands stay zero-friction; the `audit` subcommand
+        # runs it explicitly.
+        if os.environ.get("AERO_PREFLIGHT", "").strip().lower() in ("1", "true", "yes"):
+            from core.test_auditor import PreFlightTestAuditor
+
+            if not PreFlightTestAuditor().run_suite_and_heal():
+                print(
+                    "[-] Critical Stop: pre-flight self-healing could not fix "
+                    "core architecture errors. Re-run with AERO_PREFLIGHT=0 to "
+                    "bypass, or inspect the reported source files.",
+                    file=sys.stderr,
+                )
+                return 1
+
+        return main(argv)
+    except KeyboardInterrupt:
+        print("\n[-] Interrupted by user.", file=sys.stderr)
+        return 130
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - elegant user-facing guidance
+        print("==============================================================================", file=sys.stderr)
+        print(" AERO FUTURE — UNEXPECTED ERROR", file=sys.stderr)
+        print("==============================================================================", file=sys.stderr)
+        print(f"  {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("  Try:  python main.py init        (re-seed the workspace)", file=sys.stderr)
+        print("  Or:   AERO_PREFLIGHT=1 python main.py audit   (self-heal core bugs)", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli_entry())
