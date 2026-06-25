@@ -219,19 +219,6 @@ atomic_swap_directory = "bin/aero_engine"
 
 ---
 
-## Contributing
-
-Because Aero Future is itself evolving, contributions are welcome in the form of:
-
-- **New feature specs** added to `self_host.aero` (the system will generate the code).
-- **New mutation rules** (extend `source_mutator.py` with new AST transformations).
-- **New context parsers** (ingest different file formats).
-- **Improvements to the evolution loop** (e.g., better causal inference, alternative crossover operators).
-
-Fork the repo, add your spec, and let the system evolve the rest. Submit a PR with your blueprint changes and the evolved code.
-
----
-
 ## License
 
 MIT License — use it freely, evolve it infinitely.
