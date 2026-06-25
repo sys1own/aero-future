@@ -1,79 +1,101 @@
-# Aero Future – The Self‑Evolving Compiler Engine
+# Aero Future – The Infinite Build Orchestration Engine
 
-**Aero Future is the next‑generation evolution of AeroNova.**  
-It doesn’t just compile code—it **evolves itself** to continuously improve performance, add features, and adapt to new workloads.  
+**Aero Future is a universal, self‑adaptive build system that can become any build tool you need.**  
 
-> **The compiler that rewrites itself.**
+It is the evolutionary successor to AeroNova: while AeroNova introduced the concept of a **living blueprint** that drives deterministic builds, Aero Future extends that into a **self‑evolving platform** where the blueprint itself can grow, mutate, and adapt to any workload, language, or scale.
 
----
-
-## Overview
-
-Aero Future extends AeroNova’s multi‑objective optimization with a **closed‑loop self‑evolution framework**:
-
-- **Evolves its own source code** and build parameters
-- **Learns from its own history** (Block Universe memory)
-- **Generates new features** from high‑level specifications
-- **Rolls back failed mutations** automatically
-- **Runs entirely offline** – no external dependencies
-
-It is a **self‑hosting, self‑mutating, self‑improving** build system.
+> **Aero Future: one blueprint to build them all — and let the blueprint build itself.**
 
 ---
 
-## Core Features
+## Vision
 
-| Feature | Description |
-|---------|-------------|
-| **Self‑Evolution Loop** | Mutates parameters and source code, rebuilds, tests, and keeps or reverts changes based on performance. |
-| **Block Universe History** | All past builds and mutations are stored as an immutable, queryable ledger (`context.aero`). |
-| **Feature Generation** | New modules (e.g., causal inference, EHEL) are created from blueprint specs and then evolved. |
-| **Source Mutation** | Mutates Python source files using AST‑based rewrites (insert functions, add imports, add docstrings). |
-| **Causal Inference** | Estimates which parameters have the greatest impact on performance to bias mutations. |
-| **SHX Crossover** | Recombines successful historical configurations to generate better offspring. |
-| **VP Tree Similarity** | Avoids duplicate parameter searches by measuring similarity to past configurations. |
-| **Self‑Hosting** | Can compile and test itself, enabling bootstrapping and continuous evolution. |
-| **Zero Dependencies** | Uses only Python standard library + Tree‑sitter (and optional scipy/sklearn for advanced features). |
+Traditional build systems (Make, Bazel, Cargo, etc.) are fixed: they have a hard‑coded set of rules, phases, and target formats. Aero Future breaks this mold by treating the entire build lifecycle as a **declarative, queryable, and evolvable specification**.
+
+- **Blueprints are executable**: A single `blueprint.aero` (or `self_host.aero`) can describe **any** build pipeline, from compiling a single‑file script to orchestrating a polyglot microservices monorepo.
+- **Context is king**: You can inject external knowledge — source code, documentation, test suites, hardware profiles, even high‑level project goals — as context that the system ingests and uses to shape the build.
+- **Infinite customizability**: Because the system can rewrite its own blueprint and source code, it can **retrofit itself** to match new requirements without manual intervention.
+
+In short: **Aero Future is not a build tool; it is a build‑tool builder.**
 
 ---
 
 ## How It Works
 
-```mermaid
-graph TD
-    A[blueprint.aero] --> B[Evolution Loop]
-    B --> C[Mutate Parameters]
-    B --> D[Mutate Source Code]
-    C --> E[Build & Test]
-    D --> E
-    E --> F{Performance OK?}
-    F -->|Yes| G[Keep Changes, Log to Block Universe]
-    F -->|No| H[Rollback]
-    G --> I[Update Population & SHX]
-    I --> B
-    H --> B
-```
+At its core, Aero Future is a **multi‑stage optimization engine** that converts a high‑level specification (the blueprint) and a set of contexts (code, tests, hardware, goals) into an optimal, executable build pipeline.
 
-The **evolution loop** runs repeatedly:
+### 1. Blueprint as a Living Document
 
-1. **Reads** the current `self_host.aero` blueprint.
-2. **Generates** missing features from specs.
-3. **Mutates** build parameters and/or source files.
-4. **Rebuilds** the compiler (`main.py build`).
-5. **Measures** performance (speed gain, size reduction, execution time).
-6. **Logs** metrics to `context.aero`.
-7. **Rolls back** on regression.
-8. **Repeats** – each generation improves the system.
+The blueprint (`.aero` TOML) defines:
+- **Workspace structure** (root, build directories, exclusions)
+- **Targets** (source paths, languages, output formats, dependencies)
+- **Scaling boundaries** (complexity thresholds, split rules)
+- **Optimization strategies** (Pareto frontier tuning, genetic algorithms)
+- **Self‑healing policies** (retry budgets, LSP diagnostics)
+- **Evolution parameters** (mutation rates, population sizes, generation limits)
+- **Feature specs** (which modules to generate and evolve)
+
+This is not a static file — it can be **mutated, extended, and re‑interpreted** during the build, allowing the system to adapt mid‑flight.
+
+### 2. Context Injection
+
+You can feed Aero Future with **any kind of context**:
+- Source code (multiple languages)
+- Test suites
+- API documentation (`.md`, `.txt`, `.pdf`)
+- Hardware profiles (CPU, cache, SIMD)
+- Performance benchmarks from previous runs
+- Developer feedback (via `feedback.json`)
+
+The system ingests this context, builds a semantic graph (UAST), and uses it to guide decisions: which optimizations to apply, which parameters to tune, which features to generate.
+
+### 3. Self‑Evolution
+
+The evolution loop is the engine’s **adaptive core**:
+
+- It mutates the **blueprint parameters** (compiler flags, threshold values, population sizes).
+- It mutates the **source code** of the engine itself (inserting new functions, adjusting imports, adding docstrings).
+- It generates **new modules** from high‑level feature specs (causal inference, experience replay, multi‑task BO).
+- It tests every mutation by rebuilding and rerunning the test suite.
+- It keeps only the changes that improve performance (speed, size, accuracy) and rolls back failures.
+
+Over time, the system **specializes to your workload**, discovering configurations and code structures that no human would have thought of.
+
+### 4. Block Universe Memory
+
+Every mutation, every build, every metric is stored in an append‑only ledger (`context.aero`). This creates a **cryptographically verifiable history** — the Block Universe — which the system can query to:
+- Avoid repeating failed configurations.
+- Recombine successful historical settings (SHX crossover).
+- Estimate causal effects of parameters (causal inference).
+- Transfer knowledge across different projects (multi‑task Bayesian optimization).
+
+This is what makes Aero Future **infinite**: it never forgets, and it never stops learning.
+
+---
+
+## Key Capabilities
+
+### For Developers
+
+| Use Case | How Aero Future Helps |
+|----------|------------------------|
+| **Polyglot Monorepo** | Blueprint can declare targets in Rust, Python, C++, and more; the system orchestrates cross‑language dependencies and optimizations. |
+| **Embedded/HPC Optimization** | Hardware profiling + Pareto tuning + source mutation can produce binaries that are 30‑50% faster than standard builds. |
+| **Continuous Improvement** | Run the evolution loop periodically (e.g., nightly) to let the system gradually improve your build without human intervention. |
+| **Custom Build Pipeline** | Write a blueprint that defines a completely new pipeline (e.g., for data processing, ML training, firmware flashing) — the system will execute it. |
+| **Self‑Healing Builds** | The self‑healing engine automatically repairs syntax errors and missing imports, reducing build breakage in CI. |
+
+### For Tool Builders
+
+Aero Future is a **platform for building build systems**:
+
+- **Define a new build frontend**: Write a blueprint and a set of context parsers, and you have a new build tool tailored to your domain.
+- **Evolve your tool**: Because the system can mutate its own code, you can let it add new features over time — zero manual coding required.
+- **Scale horizontally**: The architecture is designed for distributed evolution (multiple sandboxed instances sharing the ledger), enabling large‑scale optimisation.
 
 ---
 
 ## Getting Started
-
-### Prerequisites
-
-- Python 3.10+
-- Tree‑sitter runtime (for parsing)
-- Optional: scikit‑learn, scipy (for causal inference and MTBO)
 
 ### Installation
 
@@ -83,30 +105,38 @@ cd aero-future
 pip install -e .
 ```
 
-### Quick Start
+### Running Your First Evolution
 
-1. **Run a self‑evolution cycle** (5 generations, population 8):
-   ```bash
-   python evolve.py . 5 8
-   ```
+```bash
+# Start with a simple self‑evolution run (5 generations, population 8)
+python evolve.py . 5 8
+```
 
-2. **Check the evolution history**:
-   ```bash
-   cat context.aero | jq '.mutation_history[] | {gen: .generation, speed_gain: .metrics.speed_gain}'
-   ```
+This will:
+- Generate any missing feature modules (causal inference, EHEL, etc.) from the blueprint.
+- Mutate parameters and source code.
+- Rebuild and test.
+- Log results to `context.aero`.
+- Show you the best performance gain per generation.
 
-3. **See what source mutations were applied**:
-   ```bash
-   git diff
-   ```
+### Seeing the Blueprint in Action
+
+```bash
+# Build using the current blueprint (standard build)
+python main.py build
+
+# Visualize the build DAG
+python main.py plan
+
+# Run self‑healing on a specific file
+python main.py heal --path builder_brains/compactor.py
+```
 
 ---
 
 ## Configuration
 
-### `self_host.aero` – The Evolution Blueprint
-
-The evolution loop is driven by a TOML‑based blueprint. Key sections:
+The heart of Aero Future is the blueprint. Below is an annotated snippet of `self_host.aero` that demonstrates its flexibility:
 
 ```toml
 [workspace]
@@ -141,65 +171,83 @@ bootstrap_stage = 1
 atomic_swap_directory = "bin/aero_engine"
 ```
 
-### Adding New Features
+**Add any new feature** by simply adding a `[features.<name>]` section. The system will generate and evolve it.
 
-To add a new feature, simply add a section to `self_host.aero`:
+---
 
-```toml
-[features.my_new_feature]
-enabled = true
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Aero Future Core                         │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────┐   ┌─────────────────────────────┐ │
+│  │   Blueprint Engine  │   │   Context Ingestion Layer   │ │
+│  │ (DSL parser, DAG)   │   │ (UAST, Tree-sitter, LSP)    │ │
+│  └─────────────────────┘   └─────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────┐   ┌─────────────────────────────┐ │
+│  │   Evolution Loop    │   │   Self-Healing v2 Engine    │ │
+│  │ (NSGA-II, SHX,      │   │ (Lookahead, LSP reflux)     │ │
+│  │  Source Mutation,   │   └─────────────────────────────┘ │
+│  │  Feature Generation)│                                    │
+│  └─────────────────────┘                                    │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────┐   ┌─────────────────────────────┐ │
+│  │   Block Universe    │   │   Runtime Sandbox           │ │
+│  │ (context.aero,      │   │ (shadow builds, atomic swap)│ │
+│  │  VP Tree, Causal    │   └─────────────────────────────┘ │
+│  │  Inference)         │                                    │
+│  └─────────────────────┘                                    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-The `FeatureGenerator` will create a stub module in `builder_brains/` on the next run.
-
 ---
 
-## CLI Commands
+## Comparison: AeroNova → Aero Future
 
-| Command | Purpose |
-|---------|---------|
-| `python evolve.py <workspace> <generations> <population>` | Run the self‑evolution loop. |
-| `python main.py build` | Standard build (used inside the loop). |
-| `python main.py plan` | Visualise the build DAG. |
-| `python main.py heal --path <file>` | Run the self‑healing repair on a single file. |
-| `python main.py commit-overlay <file>` | Save manual edits to survive regeneration. |
-
----
-
-## Architecture Highlights
-
-- **Block Universe Ledger** (`context.aero`): Append‑only JSON log of all mutations, metrics, and outcomes.
-- **Source Mutator**: Uses Python’s `ast` module to rewrite code safely.
-- **Feature Generator**: Creates new modules from templates based on blueprint specs.
-- **SHX (Search History Driven Crossover)**: Recombines successful historical configurations.
-- **VP Tree**: For fast similarity search in parameter space.
-- **Causal Inference**: Correlates parameters with performance to guide mutation rates.
+| Aspect | AeroNova | Aero Future |
+|--------|----------|-------------|
+| **Paradigm** | Deterministic build optimization | Self‑evolving build orchestration |
+| **Blueprints** | Static, read‑only | Living, mutable, evolvable |
+| **Adaptation** | Fixed multi‑objective tuner | Autonomous source/parameter mutation |
+| **Feature Addition** | Manual code changes | Automatic generation from specs |
+| **History** | Minimal caching | Full Block Universe ledger |
+| **Self‑Healing** | Bounded (3‑retry) | Extended with feature generation |
+| **Customizability** | High (via blueprint) | Infinite (via self‑evolution) |
+| **Target** | Any codebase | Any codebase + the system itself |
 
 ---
 
 ## Contributing
 
-Aero Future is itself an evolving system. Contributions are welcome:
+Because Aero Future is itself evolving, contributions are welcome in the form of:
 
-1. Fork the repository.
-2. Add a new feature spec to `self_host.aero`.
-3. Run the evolution loop to let the system generate and refine the code.
-4. Submit a pull request with the new spec and the evolved code.
+- **New feature specs** added to `self_host.aero` (the system will generate the code).
+- **New mutation rules** (extend `source_mutator.py` with new AST transformations).
+- **New context parsers** (ingest different file formats).
+- **Improvements to the evolution loop** (e.g., better causal inference, alternative crossover operators).
+
+Fork the repo, add your spec, and let the system evolve the rest. Submit a PR with your blueprint changes and the evolved code.
 
 ---
 
 ## License
 
-This project is open‑source software distributed under the terms of the **MIT License**.
+MIT License — use it freely, evolve it infinitely.
 
 ---
 
-## Acknowledgements
+## The Future
 
-- Built on the foundation of [AeroNova](https://github.com/sys1own/aero-nova).
-- Inspired by evolutionary algorithms, genetic programming, and self‑healing systems.
+Aero Future is designed to be **the last build tool you'll ever need**, because it can become any build tool you'll ever need. As it evolves, it will:
 
----
+- Generate its own documentation.
+- Write its own tests.
+- Scale across distributed workers.
+- Support more languages and frameworks — automatically, from their source code and documentation.
 
-**Aero Future – The living compiler.**
+The journey has just begun.
+
+**Aero Future: build without boundaries.**
 ```
