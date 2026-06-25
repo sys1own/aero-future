@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
 import orchestrator
 
@@ -15,9 +16,548 @@ _BLUEPRINT_CONFIG = Path(__file__).resolve().parent / "tests" / "fixtures" / "bl
 
 
 def _load_blueprint_config(path: Optional[str] = None) -> dict:
-    """Aero Future Docstring."""
+    """Load the optional JSON build-configuration overlay.
 
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data
+    The overlay tunes default CLI behaviour (cycle counts, telemetry cadence)
+    without touching the blueprint itself.  A missing or malformed file is not
+    fatal -- the engine simply falls back to its built-in defaults.
+    """
+    config_path = Path(path) if path else _BLUEPRINT_CONFIG
+    if not config_path.is_file():
+        return {}
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring unreadable blueprint config %s: %s", config_path, exc)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# plan
+# ---------------------------------------------------------------------------
+
+
+def plan_command(args: argparse.Namespace) -> int:
+    """Render the build DAG for a blueprint without executing it."""
+    blueprint_path = args.blueprint or "blueprint.aero"
+    if not os.path.isfile(blueprint_path):
+        print(f"error: blueprint not found: {blueprint_path}", file=sys.stderr)
+        return 1
+
+    with open(blueprint_path, "r", encoding="utf-8") as handle:
+        content = handle.read()
+
+    import blueprint_lang
+
+    if blueprint_lang.looks_like_blueprint_dsl(content):
+        from build_graph import blueprint_to_dag
+
+        try:
+            blueprint = blueprint_lang.load_source(content, blueprint_path)
+            graph = blueprint_to_dag(blueprint)
+        except Exception as exc:  # noqa: BLE001 - surface validation errors cleanly
+            print(f"error: invalid blueprint: {exc}", file=sys.stderr)
+            return 1
+        print(graph.render_tree())
+        return 0
+
+    # Legacy INI/JSON/TOML blueprints: lower through the stable parser and show
+    # a flat plan derived from the resolved compilation targets.
+    from blueprint_parser import parse_blueprint
+
+    context = parse_blueprint(blueprint_path)
+    targets = context.get("compilation_targets") or []
+    dependencies = context.get("dependency_matrix") or {}
+
+    print("Build Plan (legacy INI/JSON)")
+    print("")
+    if not targets:
+        print("  (no targets declared)")
+    for index, name in enumerate(targets):
+        connector = "└──" if index == len(targets) - 1 else "├──"
+        deps = dependencies.get(name) or []
+        suffix = f"  requires: {', '.join(deps)}" if deps else ""
+        print(f"{connector} {name}{suffix}")
+    print("")
+    print(f"{len(targets)} targets")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+
+
+def build_command(args: argparse.Namespace) -> int:
+    """Run a build: either the isolated scaffold pipeline or the core engine."""
+    workspace = args.workspace or "."
+    blueprint_path = args.blueprint or os.path.join(workspace, "blueprint.aero")
+
+    from blueprint_parser import parse_blueprint
+    from src.scaffold.pipeline import ScaffoldBuildPipeline, should_run_scaffold_pipeline
+
+    context = parse_blueprint(blueprint_path)
+
+    if should_run_scaffold_pipeline(context):
+        blueprint_dir = Path(os.path.dirname(os.path.abspath(blueprint_path)))
+        pipeline = ScaffoldBuildPipeline(logger=print, verbose=True)
+        result = pipeline.run(
+            context,
+            blueprint_dir=blueprint_dir,
+            build=not args.no_scaffold_build,
+        )
+        if result.succeeded:
+            print("Isolated scaffold build complete")
+            print(f"  {'language':<17}: {result.language}")
+            print(f"  {'workspace':<17}: {result.scaffold.workspace}")
+            return 0
+        print("Isolated scaffold build failed", file=sys.stderr)
+        return 1
+
+    # Core self-evolving build cycle.
+    config = _load_blueprint_config(args.config)
+    cycles = args.cycles if args.cycles is not None else int(config.get("cycles", 3))
+    try:
+        summary = orchestrator.run_build(workspace, cycles=cycles)
+    except Exception as exc:  # noqa: BLE001 - never leak raw tracebacks to the user
+        print(f"error: build failed: {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(summary, dict) and summary.get("short_circuited"):
+        print(f"Build short-circuited: {summary.get('reason')}")
+        return 0
+    print("Build complete")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# heal
+# ---------------------------------------------------------------------------
+
+
+def _python_build_fn(path: Path):
+    """A ``build_fn`` for the self-healing loop backed by ``compile()``.
+
+    Returns an empty list when the file parses cleanly, otherwise a single
+    structured :class:`Diagnostic` describing the syntax error.
+    """
+    from core.toolchain.self_healing import Diagnostic
+
+    try:
+        source = path.read_text(encoding="utf-8")
+        compile(source, str(path), "exec")
+        return []
+    except SyntaxError as exc:
+        return [
+            Diagnostic(
+                message=exc.msg or "syntax error",
+                file=str(path),
+                severity="error",
+                line=exc.lineno or 1,
+                column=(exc.offset or 1),
+                source="python-compile",
+            )
+        ]
+
+
+def heal_command(args: argparse.Namespace) -> int:
+    """Run the bounded self-healing loop against a single source file."""
+    target = Path(args.path)
+    if not target.is_file():
+        print(f"error: file not found: {target}", file=sys.stderr)
+        return 1
+
+    from core.toolchain.self_healing import detect_language, heal_module
+
+    language = detect_language(target)
+    if language != "python":
+        # Non-Python languages need a real compiler-backed build_fn; without a
+        # toolchain invocation here we can only verify and report.
+        print(f"[Heal] {target}  language={language or 'unknown'} (verify-only)")
+        return 0
+
+    report = heal_module(target, _python_build_fn, language="python")
+    if report.success:
+        if report.applied:
+            print(f"[Heal] {target}: repaired via {', '.join(report.applied)}")
+        else:
+            print(f"[Heal] {target}: already clean")
+        return 0
+
+    print(f"[Heal] {target}: unresolved after {report.attempts} attempt(s)", file=sys.stderr)
+    for diag in report.final_diagnostics:
+        print(f"  {diag.file}:{diag.line}:{diag.column}: {diag.message}", file=sys.stderr)
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# scaffold
+# ---------------------------------------------------------------------------
+
+
+def scaffold_command(args: argparse.Namespace) -> int:
+    """Generate a standalone, out-of-tree repository from a single source entry."""
+    from src.scaffold import ScaffoldEngine, SourceEntryNotFound
+
+    dist = Path(args.distribution_directory) if args.distribution_directory else None
+    engine = ScaffoldEngine(logger=print, verbose=True)
+    try:
+        result = engine.scaffold(
+            source_entry=args.source_entry,
+            name=args.name,
+            distribution_directory=dist,
+            build=not args.no_build,
+        )
+    except SourceEntryNotFound as exc:
+        print(f"error: source entry not found: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"error: not found: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Standalone repository generated at {result.workspace}")
+    if result.build is not None and not result.build.get("succeeded", True):
+        print("  (note: post-generation build step did not succeed)", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# infer  (zero-config Invisible Configuration Layer)
+# ---------------------------------------------------------------------------
+
+
+def infer_command(args: argparse.Namespace) -> int:
+    """Infer a full build DAG from a lean blueprint + the project file tree."""
+    workspace = Path(args.workspace or ".")
+    blueprint_path = workspace / "blueprint.aero"
+    if not blueprint_path.is_file():
+        print(f"error: blueprint not found: {blueprint_path}", file=sys.stderr)
+        return 1
+
+    content = blueprint_path.read_text(encoding="utf-8")
+
+    from src.invisible_config import InvisibleConfigEngine
+    from src.invisible_config.lean_parser import looks_like_lean_blueprint
+
+    if not looks_like_lean_blueprint(content):
+        print(
+            f"error: {blueprint_path} is not an ultra-lean blueprint; "
+            "'infer' requires the zero-config dialect.",
+            file=sys.stderr,
+        )
+        return 1
+
+    dag = InvisibleConfigEngine(workspace).infer_from_source(content)
+    payload = dag.to_dict()
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print("zero-config build inference (Invisible Configuration Layer)")
+    print(f"  project: {payload['project']}")
+    print(f"  optimize: {payload['optimize']}")
+    print(f"  execution order: {' -> '.join(payload['execution_order']) or '(none)'}")
+    print("  targets:")
+    for target in payload["targets"]:
+        reason = target.get("language_reason")
+        suffix = f"  ({reason})" if reason else ""
+        print(f"    - {target['name']} [{target['language']}]{suffix}")
+    if payload["ffi_boundaries"]:
+        print("  ffi boundaries:")
+        for boundary in payload["ffi_boundaries"]:
+            print(
+                f"    - {boundary.get('provider_language')} -> "
+                f"{boundary.get('consumer_language')} via {boundary['mechanism']}"
+            )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# decompose  (complexity-driven module splitting + DAG write-back)
+# ---------------------------------------------------------------------------
+
+
+def decompose_command(args: argparse.Namespace) -> int:
+    """Analyse the workspace, build the dependency DAG, and persist it."""
+    workspace = Path(args.workspace or ".")
+    if not workspace.is_dir():
+        print(f"error: workspace not found: {workspace}", file=sys.stderr)
+        return 1
+
+    from core.analysis import InferenceEngine
+
+    engine = InferenceEngine(workspace)
+    sources = [
+        p for p in workspace.rglob("*.py")
+        if ".aero" not in p.parts and "__pycache__" not in p.parts
+    ]
+    if not sources:
+        print("No Python sources found to analyse.")
+        return 0
+
+    analyses = engine.analyze_paths([str(p) for p in sorted(sources)])
+    dag = engine.build_dag(analyses)
+
+    blueprint_path = workspace / "blueprint.aero"
+    engine.write_dag_to_blueprint(blueprint_path, dag)
+    print(f"Decomposition DAG written to {blueprint_path} ({len(dag)} nodes)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# invariants  (Semantic Fluidity context ingestion)
+# ---------------------------------------------------------------------------
+
+
+def invariants_command(args: argparse.Namespace) -> int:
+    """Ingest unstructured context into a typed invariant schema."""
+    source_dir = Path(args.source_dir)
+    if not source_dir.is_dir():
+        print(f"error: context directory not found: {source_dir}", file=sys.stderr)
+        return 1
+
+    from src.semantic_fluidity.engine import ContextIngestionEngine
+
+    engine = ContextIngestionEngine()
+    output = Path(args.output) if args.output else None
+    report = engine.ingest_and_export(source_dir, output)
+
+    print("Semantic Fluidity Ingestion:")
+    variables = report.get("variables") if isinstance(report, dict) else None
+    if variables is not None:
+        print(f"  extracted {len(variables)} invariant variable(s)")
+    print(f"  schema report written under {source_dir}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# polymorphize  (autonomous hardware polymerization)
+# ---------------------------------------------------------------------------
+
+
+def _format_topology(topology) -> List[str]:
+    return [
+        f"  arch: {topology.arch or 'unknown'}",
+        f"  cores: {topology.physical_cores} physical / {topology.logical_cores} logical",
+        f"  best SIMD: {topology.best_simd()}  (vector width {topology.vector_width_bytes()}B)",
+        f"  cache line: {topology.cache_line_bytes()}B",
+        f"  memory bandwidth class: {topology.memory_bandwidth_class}",
+    ]
+
+
+def polymorphize_command(args: argparse.Namespace) -> int:
+    """Probe the host and rewrite generated source for its exact topology."""
+    from src.polymorphization import PolymorphizationEngine
+
+    engine = PolymorphizationEngine()
+
+    if args.profile_only:
+        topology = engine.profile_host()
+        print("Hardware Topology:")
+        for line in _format_topology(topology):
+            print(line)
+        return 0
+
+    source_dir = Path(args.source_dir)
+    if not source_dir.is_dir():
+        print(f"error: source directory not found: {source_dir}", file=sys.stderr)
+        return 1
+
+    cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    report = engine.polymerize_tree(source_dir, cache_dir)
+
+    print("Autonomous Hardware-Polymerization:")
+    for line in _format_topology(engine.last_topology):
+        print(line)
+    rewrite = report.get("rewrite", {})
+    rewritten = rewrite.get("rewritten_files", rewrite.get("files", []))
+    print(f"  rewrote {len(rewritten) if hasattr(rewritten, '__len__') else rewritten} file(s) into the polymorph cache")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ingest  (AST registry ingestion)
+# ---------------------------------------------------------------------------
+
+
+def ingest_command(args: argparse.Namespace) -> int:
+    """Ingest source into the AST registry and register it in the blueprint."""
+    workspace = Path(args.workspace or ".")
+    blueprint_path = workspace / "blueprint.aero"
+
+    if args.list:
+        from src.blueprint import load_blueprint
+
+        print("Ingested contexts:")
+        if blueprint_path.is_file():
+            blueprint = load_blueprint(blueprint_path)
+            registry = getattr(blueprint, "context_registry", {}) or {}
+            for name in sorted(registry):
+                print(f"  - {name}")
+        return 0
+
+    if not args.path:
+        print("error: ingest requires --path or --list", file=sys.stderr)
+        return 1
+
+    target = Path(args.path)
+    if not target.exists():
+        print(f"error: path not found: {target}", file=sys.stderr)
+        return 1
+
+    from src.registry import ingest_context
+    from src.registry.ingest import IngestError
+
+    base = target if target.is_dir() else target.parent
+    context_name = base.resolve().name or "context"
+    db_path = workspace / ".aero" / "registry.db"
+    try:
+        result = ingest_context(
+            context_name,
+            target,
+            db_path=db_path,
+            blueprint_path=blueprint_path,
+        )
+    except IngestError as exc:
+        print(f"error: ingest failed: {exc}", file=sys.stderr)
+        return 1
+
+    ingested = getattr(result, "ingested", None)
+    count = len(ingested) if ingested is not None else "?"
+    print(f"Ingested context '{context_name}' ({count} file(s)) into the registry.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# commit-overlay  (preserve manual edits across regeneration)
+# ---------------------------------------------------------------------------
+
+
+def commit_overlay_command(args: argparse.Namespace) -> int:
+    """Capture manual edits to a generated file as a reusable overlay patch."""
+    from src.overlay import OverlayManager
+    from src.overlay.manager import OverlayError
+
+    manager = OverlayManager(args.workspace or ".")
+    try:
+        patch = manager.commit_overlay(args.file)
+    except OverlayError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if patch is None:
+        print("No edits to commit (file matches its pristine baseline).")
+        return 0
+    print(f"Committed overlay for {args.file}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# parser
+# ---------------------------------------------------------------------------
+
+
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="aero",
+        description="Aero Future -- the infinite build orchestration engine.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    p_build = sub.add_parser("build", help="Build the workspace from a blueprint.")
+    p_build.add_argument("--workspace", default=None, help="Workspace root (default: .).")
+    p_build.add_argument("--blueprint", default=None, help="Path to the blueprint file.")
+    p_build.add_argument("--config", default=None, help="Optional JSON config overlay.")
+    p_build.add_argument("--cycles", type=int, default=None, help="Evolution cycles to run.")
+    p_build.add_argument(
+        "--no-scaffold-build",
+        action="store_true",
+        help="Generate the scaffold repo but skip the cargo/python build step.",
+    )
+    p_build.add_argument(
+        "--no-polymorph",
+        action="store_true",
+        help="Skip the hardware-polymorphization rewrite stage.",
+    )
+    p_build.set_defaults(handler=build_command)
+
+    p_plan = sub.add_parser("plan", help="Render the build DAG without executing it.")
+    p_plan.add_argument("--blueprint", default=None, help="Path to the blueprint file.")
+    p_plan.set_defaults(handler=plan_command)
+
+    p_heal = sub.add_parser("heal", help="Run self-healing on a single source file.")
+    p_heal.add_argument("--path", required=True, help="File to heal.")
+    p_heal.set_defaults(handler=heal_command)
+
+    p_scaffold = sub.add_parser(
+        "scaffold", help="Generate a standalone repository from one source entry."
+    )
+    p_scaffold.add_argument("--source-entry", required=True, help="Source file to scaffold from.")
+    p_scaffold.add_argument("--name", default=None, help="Generated project name.")
+    p_scaffold.add_argument(
+        "--distribution-directory", default=None, help="Output directory for the repo."
+    )
+    p_scaffold.add_argument(
+        "--no-build", action="store_true", help="Skip the build step after generation."
+    )
+    p_scaffold.set_defaults(handler=scaffold_command)
+
+    p_infer = sub.add_parser("infer", help="Infer a build DAG from a lean blueprint.")
+    p_infer.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_infer.add_argument("--json", action="store_true", help="Emit the inferred DAG as JSON.")
+    p_infer.set_defaults(handler=infer_command)
+
+    p_decompose = sub.add_parser(
+        "decompose", help="Analyse the workspace and write its dependency DAG."
+    )
+    p_decompose.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_decompose.set_defaults(handler=decompose_command)
+
+    p_invariants = sub.add_parser(
+        "invariants", help="Ingest unstructured context into a typed invariant schema."
+    )
+    p_invariants.add_argument("--source-dir", required=True, help="Directory of context files.")
+    p_invariants.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_invariants.add_argument("--output", default=None, help="Schema report output path.")
+    p_invariants.set_defaults(handler=invariants_command)
+
+    p_poly = sub.add_parser(
+        "polymorphize", help="Rewrite generated source for the host hardware topology."
+    )
+    p_poly.add_argument("--source-dir", default="build_artifacts", help="Generated source dir.")
+    p_poly.add_argument("--cache-dir", default=None, help="Ephemeral polymorph cache dir.")
+    p_poly.add_argument(
+        "--profile-only", action="store_true", help="Only print the host hardware topology."
+    )
+    p_poly.set_defaults(handler=polymorphize_command)
+
+    p_ingest = sub.add_parser("ingest", help="Ingest source into the AST registry.")
+    p_ingest.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_ingest.add_argument("--path", default=None, help="File or directory to ingest.")
+    p_ingest.add_argument("--list", action="store_true", help="List ingested contexts.")
+    p_ingest.set_defaults(handler=ingest_command)
+
+    p_overlay = sub.add_parser(
+        "commit-overlay", help="Capture manual edits to a generated file as an overlay."
+    )
+    p_overlay.add_argument("file", help="The generated file whose edits to preserve.")
+    p_overlay.add_argument("--workspace", default=".", help="Project root (default: .).")
+    p_overlay.set_defaults(handler=commit_overlay_command)
+
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = create_parser().parse_args(list(argv) if argv is not None else None)
+    handler = getattr(args, "handler", None)
+    if handler is None:
+        create_parser().print_help(sys.stderr)
+        return 1
+    return int(handler(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

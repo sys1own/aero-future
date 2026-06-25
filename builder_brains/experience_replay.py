@@ -429,8 +429,3 @@ class ExperienceReplayBuffer:
                 1 for t in trajectories if t.get("parameter_matrix")
             ),
         }
-
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data

@@ -621,8 +621,3 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     metadata['decision_tree_status'] = 'budget_exceeded' if wall_seconds > wall_limit else 'complete'
     logger.info('Decision-tree pipeline finished in %.3fs — strategy=%s, action=%s', wall_seconds, resolved_strategy.name, action_label)
     return metadata
-
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data

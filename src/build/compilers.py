@@ -261,6 +261,10 @@ def _cargo_build_flags(flags: Sequence[str]) -> List[str]:
             continue
         if flag.startswith("--edition="):
             continue
+        # ``--release`` is hoisted to a dedicated cargo flag by the caller, so
+        # drop it here to avoid emitting it twice.
+        if flag == "--release":
+            continue
         result.append(flag)
     return result
 

@@ -173,6 +173,37 @@ atomic_swap_directory = "bin/aero_engine"
 
 **Add any new feature** by simply adding a `[features.<name>]` section. The system will generate and evolve it.
 
+### The Living Blueprint Schema
+
+The strategic, polyglot front-end of a blueprint is the **living-blueprint** schema:
+a small, typed document that declares the system identity, the source contexts to
+ingest, and the scaling boundaries that drive automatic module decomposition.
+
+```toml
+[system]
+name = "production-scale-polyglot-pipeline"
+strategy = "universal-engine"
+ephemeral_code = true
+
+[context_registry.core_application]
+path = "./src/app_logic.py"
+language = "python"
+preserve_original_logic = false
+
+[scaling]
+auto_split_threshold = 120
+max_module_complexity = 12
+hierarchy_depth = 4
+```
+
+- **`[system]`** — the engine identity and global strategy. `ephemeral_code = true`
+  lets the system freely regenerate intermediate artifacts.
+- **`[context_registry.<name>]`** — each source context to ingest, its language, and
+  whether its original logic must be preserved verbatim.
+- **`[scaling]`** — the structural-complexity thresholds that trigger automatic
+  splitting (`auto_split_threshold`), per-module complexity caps
+  (`max_module_complexity`), and the maximum hierarchy depth.
+
 ---
 
 ## Architecture Overview

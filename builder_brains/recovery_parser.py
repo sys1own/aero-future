@@ -145,8 +145,3 @@ class AeroTreeRecoveryParser:
                 if b"{" in context_window and b"}" not in context_window:
                     return rules["missing_scope_close"]
         return None
-
-# Aero Future Mutation
-def aero_future_function(data):
-    print('Evolved function called!')
-    return data
