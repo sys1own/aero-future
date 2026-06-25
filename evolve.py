@@ -834,6 +834,115 @@ def _run_source_mutation(workspace: str, targets: List[str], rules: List[str], r
     mutator.rollback()
 
 
+# ===========================================================================
+# Aero-Calculus graph evolution (directive #30)
+# ===========================================================================
+# Instead of mutating text files, the Aero-Calculus evolution loop rewrites the
+# compiled `.aeroc` graph directly, using only linear-type-preserving node
+# operations.  The two safe operators are:
+#
+#   * Reduction  -- firing an active pair is a confluent, type-preserving graph
+#     rewrite that strictly minimizes the topology (the optimization signal).
+#   * Crossover  -- the disjoint union of two compiled graphs.  Because each
+#     graph is independently well-typed and fully port-terminated, their union
+#     is too: no auxiliary port is left dangling and no wire changes type.
+#
+# Fitness is the minimized node count: fewer nodes == a more reduced program.
+
+
+def graph_node_count(network) -> int:
+    return len(network.nodes)
+
+
+def type_safe_mutation(network) -> int:
+    """Apply one type-preserving graph rewrite in place; return steps fired.
+
+    A single active-pair reduction is the canonical linear-type-preserving
+    mutation: it rewires only auxiliary ports across an active pair and removes
+    the interacting agents, never introducing an ill-typed or un-terminated
+    edge.  Returns the number of reduction steps actually performed (0 or 1).
+    """
+    if not network.active_pairs:
+        return 0
+    return 1 if network.reduce_step() else 0
+
+
+def topological_crossover(network_a, network_b):
+    """Combine two compiled graphs into one via a type-preserving union.
+
+    Node ids from the second parent are rewritten to stay unique.  Every wire
+    is preserved exactly, so linear typing and port termination are inherited
+    from the parents.
+    """
+    from core.aeroc import deserialize_network, serialize_network
+
+    data_a = serialize_network(network_a)
+    data_b = serialize_network(network_b)
+
+    # Namespace parent B's node ids to avoid collisions.
+    remap = {rec["node_id"]: f"b::{rec['node_id']}" for rec in data_b["nodes"]}
+    for rec in data_b["nodes"]:
+        rec["node_id"] = remap[rec["node_id"]]
+        for port in rec["ports"]:
+            if port["target"] is not None:
+                owner, name = port["target"]
+                port["target"] = [remap.get(owner, owner), name]
+
+    merged = {
+        "version": data_a["version"],
+        "nodes": data_a["nodes"] + data_b["nodes"],
+    }
+    merged["node_count"] = len(merged["nodes"])
+    merged["active_pairs"] = []
+    return deserialize_network(merged)
+
+
+def evolve_aeroc(
+    aeroc_path: str, generations: int = 8, output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """Evolve a compiled `.aeroc` graph by type-safe in-memory rewriting.
+
+    Each generation fires one safe reduction, chronologically logging the
+    mutation to the Block Universe ledger, until the graph reaches its
+    minimized normal form.  The optimized graph is written back to disk.
+    """
+    from core.aeroc import load_aeroc, save_aeroc
+    from core.spacetime_ledger import BlockUniverseLedger
+
+    network = load_aeroc(aeroc_path)
+    start_nodes = graph_node_count(network)
+
+    ledger_path = os.path.join(os.path.dirname(os.path.abspath(aeroc_path)) or ".", "context.aero")
+    ledger = BlockUniverseLedger(ledger_path)
+
+    run = 0
+    for generation in range(generations):
+        before = graph_node_count(network)
+        steps = type_safe_mutation(network)
+        if steps == 0:
+            break  # already minimized -- no further safe rewrite available
+        run += steps
+        ledger.append_transaction(
+            {
+                "kind": "graph_evolution",
+                "generation": generation,
+                "operator": "active_pair_reduction",
+                "nodes_before": before,
+                "nodes_after": graph_node_count(network),
+            }
+        )
+
+    out = output_path or aeroc_path
+    save_aeroc(network, out)
+    return {
+        "generations": run,
+        "start_nodes": start_nodes,
+        "final_nodes": graph_node_count(network),
+        "output": out,
+        "ledger_length": len(ledger),
+    }
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if len(sys.argv) < 3:
