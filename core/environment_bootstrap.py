@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from typing import Dict, List
@@ -33,6 +34,24 @@ from typing import Dict, List
 # Map an importable module name to the pip distribution that provides it.
 REQUIRED_PACKAGES: Dict[str, str] = {
     "numpy": "numpy",
+}
+
+# System toolchains required per language: not just the compiler binary but the
+# high-level package manager needed for external-registry resolution.  A Rust
+# project needs both ``rustc`` AND ``cargo`` (cargo drives crate fetching).
+SYSTEM_TOOLCHAINS: Dict[str, List[str]] = {
+    "rust": ["rustc", "cargo"],
+    "auto": ["rustc", "cargo"],
+    "c": ["cc"],
+    "cpp": ["c++"],
+    "fortran": ["gfortran"],
+    "python": ["python3"],
+}
+
+# Best-effort installer commands for provisioning a missing system binary.
+_TOOLCHAIN_PROVISIONERS: Dict[str, List[List[str]]] = {
+    "rustc": [["rustup", "toolchain", "install", "stable"]],
+    "cargo": [["rustup", "toolchain", "install", "stable"]],
 }
 
 # Default living-blueprint template seeded into a fresh workspace.
@@ -128,6 +147,64 @@ class RuntimeEnvironmentBootstrapper:
             )
             if not cls.provision(packages[module_name]):
                 ok = False
+        return ok
+
+    # -- system toolchain verification ------------------------------------
+    @classmethod
+    def missing_toolchain_binaries(cls, language: str) -> List[str]:
+        """Return required system binaries for ``language`` that are not on PATH."""
+        required = SYSTEM_TOOLCHAINS.get(language, [])
+        return [binary for binary in required if shutil.which(binary) is None]
+
+    @classmethod
+    def provision_system_binary(cls, binary: str) -> bool:
+        """Best-effort provisioning of a missing system binary via a known installer.
+
+        Returns ``True`` if the binary is present afterwards.  Never raises: a
+        missing installer or a failed install is logged and reported as ``False``
+        so the caller can surface actionable guidance instead of crashing.
+        """
+        if shutil.which(binary) is not None:
+            return True
+        for command in _TOOLCHAIN_PROVISIONERS.get(binary, []):
+            installer = command[0]
+            if shutil.which(installer) is None:
+                continue
+            _telemetry(f"[*] Provisioning system toolchain '{binary}' via '{installer}'...")
+            try:
+                subprocess.check_call(
+                    command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT
+                )
+            except (subprocess.CalledProcessError, OSError) as exc:
+                _telemetry(f"[-] Toolchain provisioning failed for '{binary}': {exc}")
+                continue
+            if shutil.which(binary) is not None:
+                _telemetry(f"[+] Successfully provisioned system toolchain: '{binary}'")
+                return True
+        return shutil.which(binary) is not None
+
+    @classmethod
+    def verify_toolchain(cls, language: str) -> bool:
+        """Verify (and best-effort provision) the system toolchain for ``language``.
+
+        For a Rust/``auto`` project this guarantees both ``rustc`` and ``cargo``
+        are available so external-registry crate resolution can proceed.
+        Returns ``True`` when every required binary is present.
+        """
+        missing = cls.missing_toolchain_binaries(language)
+        if not missing:
+            return True
+        _telemetry(
+            f"[*] Missing system toolchain binaries for '{language}': {missing}"
+        )
+        ok = True
+        for binary in missing:
+            if not cls.provision_system_binary(binary):
+                ok = False
+                _telemetry(
+                    f"[-] Toolchain binary '{binary}' is unavailable. Install it "
+                    f"(e.g. via rustup) to enable '{language}' multi-crate builds."
+                )
         return ok
 
     # -- workspace auto-init ----------------------------------------------
