@@ -850,6 +850,57 @@ def _run_source_mutation(workspace: str, targets: List[str], rules: List[str], r
 # Fitness is the minimized node count: fewer nodes == a more reduced program.
 
 
+def intercept_and_synthesize_workload(raw_uast_data: dict, current_t_causal: int) -> list:
+    """Causal Horizon Synthesis gateway invoked ahead of NSGA-II generation 0.
+
+    Projects an unoptimized UAST workload through the historical path-integral
+    gradient, pre-emptively bisects any over-dense projection, and locks each
+    synthesized matrix to a quantum-phase state hash.  Returns the list of
+    synthesized ``.aeroc`` payloads, or an empty list to signal that the caller
+    should fall back to the standard evolutionary loop.
+
+    The whole pipeline is wrapped in error isolation: any coordinate/algebraic
+    exception degrades cleanly to the baseline path without halting execution.
+    """
+    print("\n==============================================================================")
+    print(" AERO FUTURE CORE: EXPERIMENTAL CAUSAL HORIZON SYNTHESIS")
+    print("==============================================================================")
+
+    try:
+        from core.causal_gradient import CausalHorizonSynthesizer
+        from core.mitosis_predictor import PredictiveMitosisEngine
+        from core.quantum_registry import AnomalyClosureError, QuantumPhaseRegistry
+
+        synthesizer = CausalHorizonSynthesizer()
+        mitosis_predictor = PredictiveMitosisEngine()
+
+        # 1. Compute past-integrals and synthesize a pre-compacted topology.
+        projected_bytes = synthesizer.synthesize_pre_compacted_topology(raw_uast_data)
+        if not projected_bytes:
+            print("[-] Causal synthesis conditions un-met. Defaulting to baseline execution path.")
+            return []
+
+        # 2. Predictive mitosis intercepts scaling boundaries before disk write.
+        root_matrix, split_matrices = mitosis_predictor.anticipate_and_slice(projected_bytes)
+
+        # 3. Lock and verify physical rigidity over every generated matrix.
+        registry = QuantumPhaseRegistry()
+        all_payloads = [root_matrix] + list(split_matrices)
+        for idx, payload in enumerate(all_payloads):
+            try:
+                state_hash = registry.encrypt_and_verify(payload, current_t_causal)
+            except AnomalyClosureError as exc:
+                print(f"[-] Rigidity anomaly on matrix [{idx}]: {exc}. Falling back to baseline.")
+                return []
+            print(f"[+] Topological matrix [{idx}] state hash locked: {state_hash}")
+
+        print("[+] Causal Horizon Synthesis completed successfully. Bypassing Generation 0.")
+        return all_payloads
+    except Exception as exc:  # noqa: BLE001 - never halt the user command
+        print(f"[-] Causal synthesis unavailable ({exc}); defaulting to baseline loop.")
+        return []
+
+
 def graph_node_count(network) -> int:
     return len(network.nodes)
 
