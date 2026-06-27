@@ -912,6 +912,12 @@ def detect_parameter_drift(current_config: Dict[str, float], baseline_config: Di
     avg_drift = total_drift / max(param_count, 1)
     return {'drifted_parameters': drifted_params, 'drifted_count': len(drifted_params), 'average_drift': round(avg_drift, 6), 'max_drift_threshold': max_drift, 'drift_exceeded': len(drifted_params) > 0}
 
+
+def _forward_current_config(current_config: Dict[str, float]) -> Dict[str, float]:
+    """Carry the active configuration forward without fallback resets."""
+    return {key: round(value, 6) for key, value in current_config.items()}
+
+
 def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str, Any]:
     """Run the full multi-objective parameter tuning pipeline.
 
@@ -986,6 +992,10 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     history_window: int = int(manifest.get('scoring', {}).get('fitness_history_window', 100))
     ema_alpha: float = float(manifest.get('scoring', {}).get('ema_alpha', 0.1))
     current_cycle: int = int(metadata.get('current_cycle', 1))
+    incoming_config: Dict[str, float] = (
+        _sanitize_config(metadata.get('best_config'))
+        or _sanitize_config(metadata.get('baseline_config'))
+    )
     sigma_boosted = False
     if metadata.get('boost_mutation_sigma'):
         boost_factor = _coerce_float(metadata.get('mutation_sigma_boost_factor'))
@@ -1050,7 +1060,9 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
         compromise = select_compromise(frontier)
         if compromise is not None:
             metadata['compromise_individual'] = compromise.to_dict()
-            metadata['best_config'] = {key: round(value, 6) for key, value in compromise.config.items()}
+            metadata['best_config'] = _forward_current_config(compromise.config)
+        elif incoming_config:
+            metadata['best_config'] = _forward_current_config(incoming_config)
         metadata['objective_champions'] = objective_champions(frontier)
         diverse = sorted(frontier, key=lambda ind: -ind.crowding_distance)[:5]
         metadata['top_individuals'] = [ind.to_dict() for ind in diverse]
@@ -1060,7 +1072,7 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     elapsed = time.monotonic() - start_time
     if elapsed < wall_limit:
         baseline_config: Dict[str, float] = metadata.get('baseline_config', {})
-        current_config: Dict[str, float] = metadata.get('best_config', {})
+        current_config: Dict[str, float] = _sanitize_config(metadata.get('best_config', {}))
         if baseline_config and current_config:
             drift_result = detect_parameter_drift(current_config, baseline_config, max_drift=max_drift)
             metadata['drift_analysis'] = drift_result
@@ -1068,6 +1080,8 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
                 logger.warning('Parameter drift detected: %d parameters exceed threshold', drift_result['drifted_count'])
         else:
             metadata['drift_analysis'] = {'status': 'no_baseline_available'}
+        if current_config:
+            metadata['best_config'] = _forward_current_config(current_config)
     elapsed = time.monotonic() - start_time
     if elapsed < wall_limit:
         tracker_stats = metadata.get('survival_tracker_stats', {})

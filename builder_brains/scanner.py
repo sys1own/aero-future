@@ -30,6 +30,7 @@ from builder_brains.manifest_utils import (
     get_thresholds,
     load_manifest,
 )
+from blueprint_parser import get_anomaly_ceiling
 
 logger = logging.getLogger('builder_brains.scanner')
 _TOKEN_PATTERNS: Dict[str, str] = {'function_def': '\\bdef\\s+[a-zA-Z_]\\w*\\s*\\(', 'class_def': '\\bclass\\s+[a-zA-Z_]\\w*\\s*[\\(:]', 'import_stmt': '^\\s*(?:from\\s+\\S+\\s+)?import\\s+', 'decorator': '^\\s*@[a-zA-Z_]\\w*', 'string_literal': '(?:\\"\\"\\"[\\s\\S]*?\\"\\"\\"|\'\'\'[\\s\\S]*?\'\'\'|\\"[^\\"\\\\]*(?:\\\\.[^\\"\\\\]*)*\\"|\'[^\'\\\\]*(?:\\\\.[^\'\\\\]*)*\')', 'numeric_literal': '\\b(?:0[xXoObB])?[\\d]+(?:\\.[\\d]+)?(?:[eE][+-]?\\d+)?\\b', 'comment_line': '#[^\\n]*', 'assignment': '[a-zA-Z_]\\w*\\s*(?:[:+\\-*/|&^]=|=(?!=))', 'return_stmt': '\\breturn\\b', 'raise_stmt': '\\braise\\b', 'try_block': '\\btry\\s*:', 'except_block': '\\bexcept\\b', 'with_stmt': '\\bwith\\b', 'yield_expr': '\\byield\\b', 'lambda_expr': '\\blambda\\b', 'list_comp': '\\[.+\\bfor\\b.+\\bin\\b.+\\]', 'dict_comp': '\\{.+:\\s*.+\\bfor\\b.+\\bin\\b.+\\}', 'assert_stmt': '\\bassert\\b', 'global_stmt': '\\bglobal\\b', 'nonlocal_stmt': '\\bnonlocal\\b', 'async_def': '\\basync\\s+def\\b', 'await_expr': '\\bawait\\b'}
@@ -336,7 +337,6 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     ngram_window: int = int(params.get('token_ngram_window', 4))
     similarity_cutoff: float = float(params.get('structural_similarity_cutoff', 0.8))
     coverage_target: float = float(thresholds.get('scan_coverage_target', 0.95))
-    anomaly_ceiling: int = int(thresholds.get('anomaly_alert_ceiling', 50))
     scan_targets: List[str] = list(metadata.get('scan_targets', []))
     workspace_root: str = metadata.get('workspace_root', '')
     if not scan_targets and workspace_root and os.path.isdir(workspace_root):
@@ -351,7 +351,16 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
         metadata['scanner_status'] = 'skipped_no_targets'
         metadata['scanner_wall_seconds'] = 0.0
         return metadata
+    parser_validation = metadata.get('parser_validation', {})
+    if not isinstance(parser_validation, dict):
+        parser_validation = {}
+    anomaly_ceiling: int = int(
+        parser_validation.get('anomaly_ceiling')
+        or thresholds.get('anomaly_alert_ceiling')
+        or get_anomaly_ceiling(scan_targets)
+    )
     metadata['scan_target_count'] = len(scan_targets)
+    metadata['anomaly_ceiling'] = anomaly_ceiling
     scanner = FileScanner(worker_count=worker_count, max_file_bytes=max_file_bytes)
     scan_output = scanner.scan_files(scan_targets)
     metadata['scan_summary'] = {'scanned': scan_output['scanned_count'], 'failed': scan_output['failed_count'], 'total': scan_output['total_files'], 'duration_seconds': scan_output['scan_duration_seconds']}

@@ -216,6 +216,7 @@ _BRAINS_DIR = _REPO_ROOT / "builder_brains"
 _MANIFEST_PATH = _BRAINS_DIR / "build_manifest.json"
 _BLUEPRINT_PATH = _REPO_ROOT / "blueprint.aero"
 _DEFAULT_TELEMETRY_INTERVAL = 2.0
+_ANOMALY_DRIFT_THRESHOLD = 1.0
 _SOURCE_EXTENSIONS = {".py", ".json", ".md", ".txt", ".toml", ".yaml", ".yml", ".ini", ".cfg"}
 _IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv"}
 
@@ -387,6 +388,11 @@ def _extract_build_context(workspace_root: Path, manifest: Dict[str, Any]) -> Di
     scaling = build_context.get("scaling", {})
     if isinstance(scaling, dict) and "max_module_complexity" in scaling:
         build_context["blueprint_max_module_complexity"] = scaling["max_module_complexity"]
+    system = build_context.get("system", {})
+    if isinstance(system, dict):
+        strategy = str(system.get("strategy", "")).strip()
+        if strategy:
+            build_context["blueprint_strategy"] = strategy
 
     return build_context
 
@@ -728,6 +734,57 @@ def _record_experience_status(metadata: Dict[str, Any]) -> str:
     return "not-recorded"
 
 
+def _user_selected_strategy(metadata: Mapping[str, Any]) -> str:
+    strategy = str(metadata.get("blueprint_strategy", "")).strip()
+    if strategy:
+        return strategy
+    system = metadata.get("system", {})
+    if isinstance(system, Mapping):
+        strategy = str(system.get("strategy", "")).strip()
+        if strategy:
+            return strategy
+    return "DIRECT_COMPILE"
+
+
+def _anomaly_ratio(metadata: Mapping[str, Any]) -> float:
+    parser_validation = metadata.get("parser_validation", {})
+    if not isinstance(parser_validation, Mapping):
+        parser_validation = {}
+    ceiling = int(
+        metadata.get("anomaly_ceiling")
+        or parser_validation.get("anomaly_ceiling")
+        or 0
+    )
+    if ceiling <= 0:
+        return 0.0
+    anomaly_count = max(
+        int(metadata.get("anomaly_count", 0) or 0),
+        int(parser_validation.get("parameter_validation_failures", 0) or 0),
+    )
+    return anomaly_count / float(ceiling)
+
+
+def _honor_blueprint_strategy(metadata: Dict[str, Any]) -> None:
+    anomaly_ratio = _anomaly_ratio(metadata)
+    metadata["anomaly_ratio"] = anomaly_ratio
+    if anomaly_ratio >= _ANOMALY_DRIFT_THRESHOLD:
+        strategy = _user_selected_strategy(metadata)
+        logger.warning(
+            "Anomaly ratio %.2f exceeds threshold; continuing with user-specified strategy %s.",
+            anomaly_ratio,
+            strategy,
+        )
+        metadata["resolved_strategy"] = strategy
+        metadata["strategy_mode"] = strategy.lower()
+        metadata["selected_action_label"] = "honor_blueprint_strategy"
+
+
+def should_write_aeroc(strategy: str, compiled_count: int, bytes_written: int) -> bool:
+    if compiled_count > 0 and bytes_written > 0:
+        return True
+    return False
+
+
 def _render_telemetry(telemetry: CycleTelemetry) -> None:
     if os.name == "nt":
         subprocess.run(["cmd", "/c", "cls"], check=False)
@@ -918,6 +975,7 @@ def run_build(
             metadata.update(tuner_metadata)
             metadata.update(decision_metadata)
             stage_results.extend([decision_result, tuner_result])
+            _honor_blueprint_strategy(metadata)
 
             if bool(metadata.get("kinetic_stagnation_anomaly") or metadata.get("is_stagnant")):
                 neural_variants = maybe_run_neural_synthesis(
@@ -973,7 +1031,21 @@ def run_build(
                     + int(metadata.get("decomposition_bytes_written", 0))
                 )
             manifest = _persist_orchestrator_state(manifest, metadata)
-            applied_assets = _apply_manifest_to_assets(workspace, manifest, metadata)
+            metadata["should_write_aeroc"] = should_write_aeroc(
+                str(metadata.get("resolved_strategy", "unknown")),
+                int(metadata.get("compiled_target_count", 0)),
+                int(metadata.get("bytes_written", 0)),
+            )
+            if metadata["should_write_aeroc"]:
+                applied_assets = _apply_manifest_to_assets(workspace, manifest, metadata)
+            else:
+                applied_assets = []
+                logger.warning(
+                    "Skipping .aeroc asset write gate: strategy=%s compiled=%d bytes=%d",
+                    metadata.get("resolved_strategy", "unknown"),
+                    int(metadata.get("compiled_target_count", 0)),
+                    int(metadata.get("bytes_written", 0)),
+                )
 
             telemetry_state["telemetry"] = CycleTelemetry(
                 cycle=cycle,

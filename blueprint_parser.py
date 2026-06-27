@@ -80,6 +80,93 @@ _ALLOWED_SCHEDULERS = {"slurm", "pbs", "none"}
 _ALLOWED_DEFAULT_FLOAT = {"double", "quad", "arbitrary"}
 
 
+def get_anomaly_ceiling(scan_targets: List[Any]) -> int:
+    """Return a ceiling that scales with the number of source files."""
+    file_count = len(scan_targets)
+    return max(50, int(file_count * 0.05))
+
+
+def validate_parameter(param: Any) -> bool:
+    """Validate a parsed parameter node without penalizing unset defaults."""
+    if param is None:
+        return True
+    if isinstance(param, dict):
+        return all(bool(str(key).strip()) for key in param)
+    return True
+
+
+def _extract_scan_targets(build_context: Dict[str, Any]) -> List[str]:
+    registry = build_context.get("context_registry")
+    if isinstance(registry, dict):
+        registry_paths = [
+            str(entry.get("path", "")).strip()
+            for entry in registry.values()
+            if isinstance(entry, dict) and str(entry.get("path", "")).strip()
+        ]
+        if registry_paths:
+            return registry_paths
+
+    scaffold = build_context.get("scaffold")
+    if isinstance(scaffold, dict):
+        source_entry = scaffold.get("source_entry")
+        if isinstance(source_entry, list):
+            source_targets = [str(path).strip() for path in source_entry if str(path).strip()]
+            if source_targets:
+                return source_targets
+        if isinstance(source_entry, str) and source_entry.strip():
+            return [source_entry.strip()]
+
+    graph = build_context.get("graph")
+    if isinstance(graph, dict):
+        targets = graph.get("targets")
+        if isinstance(targets, list):
+            graph_targets = [str(target).strip() for target in targets if str(target).strip()]
+            if graph_targets:
+                return graph_targets
+
+    compilation_targets = build_context.get("compilation_targets", [])
+    if isinstance(compilation_targets, list):
+        return [str(target).strip() for target in compilation_targets if str(target).strip()]
+    return []
+
+
+def _iter_parameter_nodes(build_context: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    parameter_nodes: List[Tuple[str, Any]] = []
+    for section_name in (
+        "active_optimizer_flags",
+        "environment_targets",
+        "resource_metrics",
+        "node_configurations",
+        "graph",
+        "system",
+        "scaling",
+    ):
+        section = build_context.get(section_name)
+        if isinstance(section, dict):
+            for key, value in section.items():
+                parameter_nodes.append((f"{section_name}.{key}", value))
+    return parameter_nodes
+
+
+def _attach_parser_validation(build_context: Dict[str, Any]) -> Dict[str, Any]:
+    scan_targets = _extract_scan_targets(build_context)
+    invalid_parameters: List[str] = []
+    anomaly_count = 0
+    for key, param in _iter_parameter_nodes(build_context):
+        if param is None:
+            continue
+        if not validate_parameter(param):
+            anomaly_count += 1
+            invalid_parameters.append(key)
+    build_context["parser_validation"] = {
+        "scan_targets": scan_targets,
+        "anomaly_ceiling": get_anomaly_ceiling(scan_targets),
+        "parameter_validation_failures": anomaly_count,
+        "invalid_parameters": invalid_parameters,
+    }
+    return build_context
+
+
 def _default_optional_sections() -> Dict[str, Dict[str, Any]]:
     """Conservative defaults that preserve legacy single-machine behaviour."""
     return {
@@ -774,7 +861,7 @@ def parse_json_blueprint(content: str) -> Dict[str, Any]:
     context["workspace_status"] = "stable_active"
     context["blueprint_format"] = "json"
     context["timestamp"] = time.time()
-    return context
+    return _attach_parser_validation(context)
 
 
 def parse_blueprint_content(content: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[str]]]:
@@ -964,7 +1051,7 @@ def _parse_toml_native_blueprint(content: str, project_root: str) -> Dict[str, A
         },
     }
     context.update(_default_optional_sections())
-    return context
+    return _attach_parser_validation(context)
 
 
 def _looks_like_lean(content: str) -> bool:
@@ -1021,7 +1108,7 @@ def parse_dsl_blueprint(content: str, filename: str = "blueprint.aero") -> Dict[
     }
     context["node_configurations"] = {}
     context.update(_default_optional_sections())
-    return context
+    return _attach_parser_validation(context)
 
 
 def parse_blueprint(blueprint_path: str, manifest_path: str = _MANIFEST_PATH) -> Dict[str, Any]:
@@ -1136,7 +1223,7 @@ def parse_blueprint(blueprint_path: str, manifest_path: str = _MANIFEST_PATH) ->
             },
         }
         context.update(optional_sections)
-        return context
+        return _attach_parser_validation(context)
     except Exception as exc:
         logger.exception("Blueprint parsing failed for %s", blueprint_path)
         return create_fallback_context(stable_manifest, f"Parser failure: {exc}")
