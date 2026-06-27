@@ -4,6 +4,8 @@
 
 Now integrated with the **Aero-Calculus**, Aero Future natively lowers code syntax into high-precision, zero-allocation topological execution graphs, turning build orchestration into an entirely new paradigm of physical computing.
 
+---
+
 ## Vision
 
 Traditional build systems (Make, Bazel, Cargo, etc.) are fixed: they have a hard‑coded set of rules, phases, and target formats. Aero Future breaks this mold by treating the entire build lifecycle as a **declarative, queryable, and evolvable specification**.
