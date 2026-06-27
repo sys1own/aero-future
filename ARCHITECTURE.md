@@ -1,78 +1,165 @@
-# Architectural Core: Universal Parsing, Polyglot Decomposition, and Self-Healing Staging
+# Technical Architecture Blueprint: Aero Future (AeroNova Core)
 
-This document outlines the core internal components, data flows, and structural mutation pipelines that govern AeroNova. It details how the engine operates both as an out-of-tree polyglot code-splitting utility and as a resilient, self-hosting coordinate bootstrap system for multi-million-line physics simulators.
-
-## Design Principles
-
-1. **Backward Compatibility:** Every capability is entirely opt-in. Blueprints that omit advanced scaling blocks or physics metrics produce identical, deterministic behaviors. All 51 pre-existing baseline framework validation tests pass completely unchanged.
-2. **Staging Isolation & Self-Targeting Safety:** The tool prioritizes core interpreter runtime protection. If an execution path targets an active dependency within AeroNova's own running tree, it dynamically quarantines disk writes until code structures pass an independent validation sweep.
-3. **Graceful Degradation:** Heavy external operational infrastructure (such as Kubernetes backends, OpenBLAS, MPI bindings, or CUDA drivers) is safely detected at runtime and lazy-imported. If absent, the engine flags the target feature as unavailable and falls back to local execution without aborting the build.
-4. **Coherent Configuration Surfaces:** The human-facing INI/TOML format (`blueprint.aero`) and the internal engine-facing JSON schema (`blueprint_config.json`) are tightly aligned. The parser strictly validates input DSL syntax and boundaries before exposing them to the orchestration context.
+This document provides a exhaustive, production-grade architectural breakdown of the **Aero Future** system (governed internally by the **AeroNova** engine core). It outlines the internal mechanics, algorithmic pipelines, data flow mutations, and structural safeguards that allow the engine to function as an out-of-tree polyglot code-splitting utility and a self-healing bootstrap substrate.
 
 ---
 
-## Core Component Matrix
+## 1. Core Architectural Principles
 
-| Functional Area | Internal Architecture & Mechanism | Primary Target Files |
+The Aero Future substrate is designed around four strict engineering constraints to ensure absolute deterministic execution and zero runtime degradation:
+
+* **Opt-In Backward Compatibility:** The system introduces no breaking changes to legacy platforms. Advanced scaling modules, polyglot bridging layers, and physics validation matrices operate entirely as opt-in blocks. If a blueprint layout omits these configurations, the engine reverts to classical deterministic execution pathways, passing all 51 baseline framework validation tests completely unchanged.
+
+
+* **Staging Isolation & Self-Targeting Safety:** To protect the core interpreter during self-evolution and self-hosting optimization cycles, the engine blocks direct system writes. If an incoming execution path targets a file or dependency within Aero Future's active running tree, the system triggers a dynamic quarantine. Disk writes are held in isolation until the mutated code passes an independent structural validation sweep.
+
+
+* **Graceful Degradation via Lazy Processing:** Heavy infrastructure layers and native hardware wrappers (including Kubernetes cluster backends, OpenBLAS linear algebra libraries, MPI bindings, or CUDA/HIP GPU drivers) are lazy-imported at the exact moment of execution. If a host environment lacks these drivers, the engine flags the target feature as unavailable and falls back to localized, single-thread execution paths without crashing the active build pipeline.
+
+
+* **Coherent Configuration Surfaces:** Configuration states are bound symmetrically across two layers: the human-facing domain-specific language (`blueprint.aero` using INI/TOML formatting) and the internal machine-facing schema (`blueprint_config.json`). The parser strictly validates syntax limits, boundary bounds, and typing rules at the ingestion gate before exposing the state to the orchestration engine.
+
+
+
+---
+
+## 2. Component Matrix & Algorithmic Deep-Dive
+
+Aero Future discards traditional monolithic compilation in favor of a decoupled, highly specialized component matrix:
+
+| Functional Domain | Underlying Component & Script | Primary File Target Path |
 | --- | --- | --- |
-| **Blueprint Parser** | Handles declarative schema validation for optional custom zones, scaling thresholds, and layout parameters. | `blueprint_parser.py` |
-| **Universal Front-End** | Normalizes disparate language syntaxes (Python, Rust, C/C++, Fortran) into a 1D linearized Universal Abstract Syntax Tree (UAST) with FFI and GPU kernel edge tracking. | `src/analysis/semantic_mapper.py` |
-| **Decomposition Engine** | Employs an operational Term Rewriting System (TRS) driven by S-expression token matching to split monoliths along lossless class and global function boundaries. | `builder_brains/decision_tree.py`, `builder_brains/orchestrator.py` |
-| **Dependency Reflux** | Analyzes local/global symbol scopes across newly split modules; extracts duplicated configurations into a shared index and injects missing relative imports. | `builder_brains/reflux_engine.py` |
-| **Shadow Bootstrapper** | Detects self-hosting operations, locks direct file-system modifications, routes active mutations to an isolated cache, and conducts an atomic swap pass. | `src/build/bootstrap_staging.py` |
-| **Library Auto-Tuning** | Uses environmental probing (via pkg-config and explicit linker checks) to discover BLAS/LAPACK/MPI paths and append optimization flags to the genetic genome. | `src/build/library_tuner.py`, `src/evolution/bootstrap.py` |
-| **Precision Shield** | Computes per-compiler strict floating-point flag configurations (GCC/Clang, Intel, rustc, nvcc) to block unsafe code-generation optimizations. | `src/precision_shield/shield.py` |
-| **Distributed builds** | Operates a coordination pipeline supporting local, SSH, and Kubernetes worker pools backed by a shared network cache interface. | `src/build/distributed.py`, `src/evolution/sandbox_manager.py` |
-| **Dimensional Analyzer** | Executes heuristic dimensional unit analysis over project syntax layers via a lightweight custom AST visitor without CAS runtime overhead. | `src/physics/units.py` |
+| **Blueprint Parsing** | Declarative Schema Parser
+
+ | `blueprint_parser.py`<br> |
+| **Universal Front-End** | Semantic Mapping Engine
+
+ | `src/analysis/semantic_mapper.py`<br> |
+| **Decomposition Layer** | S-Expression Term Rewriting System (TRS)
+
+ | `builder_brains/decision_tree.py` / `orchestrator.py`<br> |
+| **Dependency Analysis** | Scope Mapping Reflux Engine
+
+ | `builder_brains/reflux_engine.py`<br> |
+| **Self-Hosting Protection** | Shadow Bootstrapper & Cache Swapper
+
+ | `src/build/bootstrap_staging.py`<br> |
+| **Linker Optimization** | Environment Probing Library Tuner
+
+ | `src/build/library_tuner.py` / `bootstrap.py`<br> |
+| **Hardware Enforcement** | Strict Floating-Point Precision Shield
+
+ | `src/precision_shield/shield.py`<br> |
+| **Distributed Orchestration** | Multi-Pool Workspace Coordinator
+
+ | `src/build/distributed.py` / `sandbox_manager.py`<br> |
+| **Mathematical Validation** | Custom AST Dimensional Analyzer
+
+ | `src/physics/units.py`<br> |
+
+### Component Explanations
+
+### Universal Front-End (`semantic_mapper.py`)
+
+The front-end parses disparate high-level languages (Python, Rust, C/C++, Fortran) and normalizes their syntax into a single-dimensional, linearized **Universal Abstract Syntax Tree (UAST)**. By flattening multi-layered language structures into a continuous array, the engine maps Foreign Function Interface (FFI) bindings and GPU compute kernel boundaries as explicit network edges, eliminating language translation overhead.
+
+### Decomposition Engine (`decision_tree.py` & `orchestrator.py`)
+
+This engine utilizes an operational **Term Rewriting System (TRS)**. Instead of using raw text regex processing, it treats source code as mathematical S-expressions. When code complexity or size exceeds defined scaling thresholds, the TRS executes pattern-matching mutations to break massive code monoliths cleanly apart along lossless class and global function boundaries without breaking the underlying application logic.
+
+### Dependency Reflux (`reflux_engine.py`)
+
+When a monolith is split apart into separate modules, its references can break. The Reflux Engine recalculates symbol visibility, local tracking variables, and global scopes across the newly generated files. It automatically extracts duplicated utility logic or shared constants into a unified index configuration and injects relative imports back into the newly split modules to preserve dependency cohesion.
+
+### Shadow Bootstrapper (`bootstrap_staging.py`)
+
+This is the system's core self-preservation mechanism. When Aero Future executes a mutation optimization pass upon its own engine core, the bootstrapper blocks direct file-system access. It catches all active file updates, writes them to an isolated cache folder (`.aero/bootstrap_stage/`), verifies compilation stability, and then executes an **atomic directory swap** to update the running engine instantly without data corruption risks.
+
+### Precision Shield (`shield.py`)
+
+To prevent modern hardware compilers (like GCC, Clang, rustc, and nvcc) from introducing dangerous optimization assumptions that corrupt complex numeric outputs, the Precision Shield calculates strict floating-point (FP) compiler flags. It forces compilers to maintain IEEE compliance, blocking unsafe constant-folding and reciprocal math shortcuts across all compilation steps.
 
 ---
 
-## Complete System Data Flow
+## 3. Complete System Data Flow
+
+The diagram below tracks the complete lifecycle of an application passing through the Aero Future pipeline, transforming raw declarative human files into an optimized, deployment-ready architecture:
+
+```text
+ blueprint.aero (INI/DSL Layout) ──┐
+                                    ├─ Ingestion & Validation ──► Context Registry
+ blueprint_config.json (Schema) ────┘                                  │
+                                                                       ▼
+                                                                SemanticMapper
+                                                          (Lossless CST Translation)
+                                                                       │
+                                                                       ▼
+                                                          Linearized 1D UAST Array
+                                                                       │
+                             ┌─────────────────────────────────────────┴─────────────────────────────────────────┐
+                             ▼                                                                                   ▼
+                [If auto_split thresholds hit]                                                      [Parallel Target Compilation]
+                 Term Rewriting System (TRS)                                                         ├── LibraryTuner (Linker Flags)
+                             │                                                                       ├── PrecisionShield (FP Enforcements)
+                             ▼                                                                       ├── GPUPipeline (CUDA/HIP Kernels)
+                Isolate Shadow Staging Area                                                         └── DistributedCoordinator
+                 (.aero/bootstrap_stage/)                                                                 (Local / SSH / K8s Pools)
+                             │
+                             ▼
+                 Symbol Scope Reflux Engine
+                 (Import Injection & utils.py)
+                             │
+                             ▼
+                 Atomic Change-Swap Deployment
 
 ```
- blueprint.aero (INI/DSL) ──┐
-                            ├─ parser & validation ──► Context Registry
- blueprint_config.json ─────┘                              │
-                                                           ▼
-                                                    SemanticMapper
-                                            (Lossless CST Translation)
-                                                           │
-                                                           ▼
-                                              Linearized 1D UAST Array
-                                                           │
-                                 ┌─────────────────────────┴─────────────────────────┐
-                                 ▼                                                   ▼
-                    [If auto_split thresholds hit]                       [Parallel Target Compilation]
-                     Term Rewriting System (TRS)                          ├── LibraryTuner (Linker Flags)
-                                 │                                        ├── PrecisionShield (FP Enforcements)
-                                 ▼                                        ├── GPUPipeline (CUDA/HIP Kernels)
-                    Isolate Shadow Staging Area                           └── DistributedCoordinator
-                     (.aero/bootstrap_stage/)                                  (Local / SSH / K8s Pools)
-                                 │
-                                 ▼
-                     Symbol Scope Reflux Engine
-                     (Import Injection & utils.py)
-                                 │
-                                 ▼
-                     Atomic Change-Swap Deployment
-
-```
 
 ---
 
-## Testing Framework & Verification Metrics
+## 4. Testing Framework & Verification Metrics
 
-AeroNova runs a highly comprehensive testing suite consisting of **117 passing automated verification tests**. The test architecture evaluates runtime performance regressions and structural accuracy guarantees across three primary criteria:
+Aero Future includes a robust, automated validation suite running **117 passing automated verification tests**. The test framework analyzes code transformations across three distinct criteria to verify execution safety:
 
-* **Structural Integrity & Self-Healing:** Validates that the Term Rewriting System can safely process, decompose, and reconnect code networks without throwing compilation syntax drops, NameErrors, or losing manual developer patch overlays.
-* **Numerical & Mathematical Invariants:** Verifies strict-FP reproducibility rules (e.g., ensuring a mock simulator cleanly computes $\pi$ to double precision) and checks that the Precision Shield successfully blocks dangerous optimization constant-folding paths.
-* **Scale & Distributed Bounds:** Tracks single-machine vs. cluster execution time differentials, records cache hit-rates after modular code sharding, and profiles underlying host hardware vector capability classes.
+* **Structural Integrity & Self-Healing:** Validates that the Term Rewriting System decomposes, isolates, and links complex code graphs without dropping syntax tokens, triggering runtime `NameErrors`, or erasing manual developer code overlays.
+
+
+* **Numerical & Mathematical Invariants:** Guarantees strict floating-point reproducibility. For example, the test suite verifies that a mock simulation model computes the value of $\pi$ to absolute double-precision accuracy, confirming that the Precision Shield successfully blocked aggressive compiler optimization shortcuts.
+
+
+* **Scale & Distributed Bounds:** Evaluates single-node vs. multi-pool worker cluster execution times, monitors data reuse rates within the shared network cache interface following modular code splitting, and profiles host machine vector execution extensions.
+
+
 
 ---
 
-## Deliberate Architectural Trade-offs
+## 5. Deliberate Architectural Trade-offs
 
-* **Staging I/O Overhead over Raw Speed:** When self-hosting paths are triggered, the engine purposefully trades write latency for system safety. Forcing every structural change through a shadow cache folder, parsing it, and verifying it via the internal scanner before executing an atomic swap introduces execution overhead, but it guarantees that a faulty code mutation pass can never leave AeroNova in a permanently corrupted or bricked state.
-* **Pragmatic Heuristics over Absolute Type Environments:** FFI border detection, text n-gram matching, and dimensional unit analysis operate as highly performant semantic heuristics. They are engineered to catch obvious compilation bugs and spatial errors across multiple languages without imposing the massive, slow computational overhead of an exact mathematical type-system checker.
-* **Lazy Dependency Loading for Core Lightness:** While distributed remote management packages like `fabric` or `kubernetes` are pinned in the global installation manifest, they are isolated behind lazy-import wrappers. They load into the active process memory pool only when a user explicitly declares a distributed strategy backend in their blueprint, keeping local single-machine builds completely dependency-free.
-* **Simulated Evolutionary Core Cost Modeling:** The multi-objective reinforcement learning Pareto optimization engine models compilation profiles and library footprint effects using structural metadata arrays rather than launching thousands of expensive real-world physical compiler processes inside the localized search loop, leaving the heavy lifting to dedicated downstream compilation workers.
+Aero Future emphasizes stability and mathematical exactness by making four intentional architectural trade-offs:
+
+> ### Staging I/O Isolation over Raw Execution Speed
+> 
+> 
+> When running a self-hosting optimization pass, the engine trades write latency for safety. Forcing file changes through an isolated shadow staging directory, parsing them, and scanning them via the internal test validator before executing an atomic swap introduces processing overhead. However, it mathematically guarantees that a faulty self-mutation code pass can never leave Aero Future in a bricked or unbootable state.
+> 
+> 
+
+> ### Semantic Heuristics over Rigid Mathematical Type-System Checkers
+> 
+> 
+> Layering a strict, formal type-system engine across multiple disparate target languages introduces extreme compilation delays. Aero Future bypasses this by executing FFI border tracking, n-gram text string mapping, and dimensional unit checks via highly optimized semantic heuristics using a lightweight, custom AST visitor. This design catches immediate execution bugs and layout scale errors without introducing massive compile-time compute overhead.
+> 
+> 
+
+> ### Lazy Dependency Initialization for Core Lightness
+> 
+> 
+> While heavy orchestration tools (like `fabric` for SSH management or `kubernetes` cluster APIs) are declared in the global system manifest, they are locked inside lazy-import wrappers. They are pulled into active system memory only if the user explicitly triggers a distributed execution backend within their blueprint, keeping local single-machine compilation loops entirely dependency-free.
+> 
+> 
+
+> ### Simulated Evolutionary Cost Modeling
+> 
+> 
+> The multi-objective reinforcement learning Pareto optimization core guides library compilation layout configurations. Rather than launching thousands of expensive, slower physical compiler processes on raw hardware during every step of the genetic optimization search loop, the system models target profile footprints using lightweight structural metadata arrays. The heavy lifting is deferred entirely to downstream compilation workers once the optimal configuration path is determined.
+> 
+>
