@@ -4,8 +4,6 @@
 
 Now integrated with the **Aero-Calculus**, Aero Future natively lowers code syntax into high-precision, zero-allocation topological execution graphs, turning build orchestration into an entirely new paradigm of physical computing.
 
-> **Aero Future: one blueprint to build them all — and let the blueprint build itself.**
-
 ---
 
 ## Vision
