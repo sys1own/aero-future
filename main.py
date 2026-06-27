@@ -114,6 +114,25 @@ def build_command(args: argparse.Namespace) -> int:
     from src.scaffold.pipeline import ScaffoldBuildPipeline, should_run_scaffold_pipeline
 
     context = parse_blueprint(blueprint_path)
+    system = context.get("system", {}) if isinstance(context.get("system"), dict) else {}
+    strategy = str(system.get("strategy", "")).strip().upper()
+
+    if strategy == "DIRECT_COMPILE":
+        try:
+            summary = orchestrator.run_direct_compile(workspace, build_context=context)
+        except Exception as exc:  # noqa: BLE001 - never leak raw tracebacks to the user
+            print(f"error: direct compile failed: {exc}", file=sys.stderr)
+            return 1
+        compiled_target_count = int(summary.get("compiled_target_count", 0))
+        bytes_written = int(summary.get("bytes_written", 0))
+        if compiled_target_count <= 0 or bytes_written <= 0:
+            print("error: direct compile produced no .aeroc output", file=sys.stderr)
+            return 1
+        print("Direct compile complete")
+        print(f"  {'compiled':<17}: {compiled_target_count}")
+        print(f"  {'bytes':<17}: {bytes_written}")
+        print(f"  {'aeroc':<17}: {summary.get('aeroc_output')}")
+        return 0
 
     if should_run_scaffold_pipeline(context):
         blueprint_dir = Path(os.path.dirname(os.path.abspath(blueprint_path)))

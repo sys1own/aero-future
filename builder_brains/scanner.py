@@ -35,6 +35,20 @@ from blueprint_parser import get_anomaly_ceiling
 logger = logging.getLogger('builder_brains.scanner')
 _TOKEN_PATTERNS: Dict[str, str] = {'function_def': '\\bdef\\s+[a-zA-Z_]\\w*\\s*\\(', 'class_def': '\\bclass\\s+[a-zA-Z_]\\w*\\s*[\\(:]', 'import_stmt': '^\\s*(?:from\\s+\\S+\\s+)?import\\s+', 'decorator': '^\\s*@[a-zA-Z_]\\w*', 'string_literal': '(?:\\"\\"\\"[\\s\\S]*?\\"\\"\\"|\'\'\'[\\s\\S]*?\'\'\'|\\"[^\\"\\\\]*(?:\\\\.[^\\"\\\\]*)*\\"|\'[^\'\\\\]*(?:\\\\.[^\'\\\\]*)*\')', 'numeric_literal': '\\b(?:0[xXoObB])?[\\d]+(?:\\.[\\d]+)?(?:[eE][+-]?\\d+)?\\b', 'comment_line': '#[^\\n]*', 'assignment': '[a-zA-Z_]\\w*\\s*(?:[:+\\-*/|&^]=|=(?!=))', 'return_stmt': '\\breturn\\b', 'raise_stmt': '\\braise\\b', 'try_block': '\\btry\\s*:', 'except_block': '\\bexcept\\b', 'with_stmt': '\\bwith\\b', 'yield_expr': '\\byield\\b', 'lambda_expr': '\\blambda\\b', 'list_comp': '\\[.+\\bfor\\b.+\\bin\\b.+\\]', 'dict_comp': '\\{.+:\\s*.+\\bfor\\b.+\\bin\\b.+\\}', 'assert_stmt': '\\bassert\\b', 'global_stmt': '\\bglobal\\b', 'nonlocal_stmt': '\\bnonlocal\\b', 'async_def': '\\basync\\s+def\\b', 'await_expr': '\\bawait\\b'}
 
+
+def resolve_anomaly_ceiling(
+    scan_targets: List[str],
+    parser_validation: Optional[Dict[str, Any]],
+    thresholds: Optional[Dict[str, Any]],
+) -> int:
+    """Prefer the largest safe ceiling across parser, manifest, and live scan size."""
+    parser_validation = parser_validation if isinstance(parser_validation, dict) else {}
+    thresholds = thresholds if isinstance(thresholds, dict) else {}
+    parser_ceiling = int(parser_validation.get('anomaly_ceiling') or 0)
+    configured_ceiling = int(thresholds.get('anomaly_alert_ceiling') or 0)
+    dynamic_ceiling = int(get_anomaly_ceiling(scan_targets))
+    return max(dynamic_ceiling, parser_ceiling, configured_ceiling, 1)
+
 @lru_cache(maxsize=4096)
 def _compile_pattern(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.MULTILINE)
@@ -352,13 +366,7 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
         metadata['scanner_wall_seconds'] = 0.0
         return metadata
     parser_validation = metadata.get('parser_validation', {})
-    if not isinstance(parser_validation, dict):
-        parser_validation = {}
-    anomaly_ceiling: int = int(
-        parser_validation.get('anomaly_ceiling')
-        or thresholds.get('anomaly_alert_ceiling')
-        or get_anomaly_ceiling(scan_targets)
-    )
+    anomaly_ceiling: int = resolve_anomaly_ceiling(scan_targets, parser_validation, thresholds)
     metadata['scan_target_count'] = len(scan_targets)
     metadata['anomaly_ceiling'] = anomaly_ceiling
     scanner = FileScanner(worker_count=worker_count, max_file_bytes=max_file_bytes)

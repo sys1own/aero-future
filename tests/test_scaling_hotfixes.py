@@ -1,10 +1,14 @@
 import os
 import tempfile
 import unittest
+from argparse import Namespace
+from unittest import mock
 
 import blueprint_parser
+import main
 import orchestrator
 from builder_brains import parameter_tuner
+from builder_brains.scanner import resolve_anomaly_ceiling
 
 
 class TestScalingHotfixes(unittest.TestCase):
@@ -42,6 +46,14 @@ language = "python"
         self.assertFalse(orchestrator.should_write_aeroc("DIRECT_COMPILE", 0, 128))
         self.assertFalse(orchestrator.should_write_aeroc("DIRECT_COMPILE", 1, 0))
 
+    def test_scanner_prefers_dynamic_ceiling_over_default_manifest_floor(self):
+        ceiling = resolve_anomaly_ceiling(
+            ["file.py"] * 5000,
+            parser_validation={},
+            thresholds={"anomaly_alert_ceiling": 50},
+        )
+        self.assertEqual(ceiling, 250)
+
     def test_blueprint_strategy_is_preserved_under_high_anomaly_pressure(self):
         metadata = {
             "blueprint_strategy": "DIRECT_COMPILE",
@@ -63,6 +75,48 @@ language = "python"
             forwarded,
             {"learning_rate": 0.125432, "mutation_sigma": 0.05},
         )
+
+    def test_build_command_bypasses_orchestrator_loop_for_direct_compile(self):
+        context = {"system": {"strategy": "DIRECT_COMPILE"}}
+        args = Namespace(
+            source=None,
+            workspace=".",
+            blueprint="blueprint.aero",
+            config=None,
+            cycles=None,
+            no_scaffold_build=False,
+        )
+        with mock.patch("blueprint_parser.parse_blueprint", return_value=context), mock.patch(
+            "main.orchestrator.run_direct_compile",
+            return_value={
+                "compiled_target_count": 1,
+                "bytes_written": 128,
+                "aeroc_output": "/tmp/matrix.aeroc",
+            },
+        ) as direct_compile, mock.patch("main.orchestrator.run_build") as run_build:
+            rc = main.build_command(args)
+
+        self.assertEqual(rc, 0)
+        direct_compile.assert_called_once()
+        run_build.assert_not_called()
+
+    def test_run_direct_compile_updates_compilation_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = tmp
+            source_path = os.path.join(tmp, "matrix.py")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("def compute():\n    return 42\n")
+
+            context = {
+                "system": {"strategy": "DIRECT_COMPILE"},
+                "scaffold": {"source_entry": source_path},
+                "parser_validation": {"scan_targets": [source_path], "anomaly_ceiling": 50},
+            }
+            summary = orchestrator.run_direct_compile(workspace, build_context=context)
+
+            self.assertGreater(summary["compiled_target_count"], 0)
+            self.assertGreater(summary["bytes_written"], 0)
+            self.assertTrue(os.path.isfile(summary["aeroc_output"]))
 
 
 if __name__ == "__main__":
