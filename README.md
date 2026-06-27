@@ -46,7 +46,7 @@ Every mutation, compile metric, and performance parameter is permanently written
 ### Installation
 
 ```bash
-git clone [https://github.com/sys1own/aero-future.git](https://github.com/sys1own/aero-future.git)
+git clone https://github.com/sys1own/aero-future.git
 cd aero-future
 pip install -e .
 
