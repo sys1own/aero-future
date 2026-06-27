@@ -734,6 +734,124 @@ def _record_experience_status(metadata: Dict[str, Any]) -> str:
     return "not-recorded"
 
 
+def _resolve_workspace_candidate(workspace_root: Path, candidate: str, blueprint_dir: str = "") -> Path:
+    raw = Path(candidate).expanduser()
+    if raw.is_absolute():
+        return raw.resolve()
+    if blueprint_dir:
+        return (Path(blueprint_dir) / raw).resolve()
+    return (workspace_root / raw).resolve()
+
+
+def _direct_compile_candidates(metadata: Mapping[str, Any]) -> List[str]:
+    candidates: List[str] = []
+    scaffold = metadata.get("scaffold", {})
+    if isinstance(scaffold, Mapping):
+        source_entry = scaffold.get("source_entry")
+        if isinstance(source_entry, (list, tuple)):
+            candidates.extend(str(path).strip() for path in source_entry if str(path).strip())
+        elif isinstance(source_entry, str) and source_entry.strip():
+            candidates.append(source_entry.strip())
+    registry = metadata.get("context_registry", {})
+    if isinstance(registry, Mapping):
+        for entry in registry.values():
+            if isinstance(entry, Mapping):
+                candidate = str(entry.get("path", "")).strip()
+                if candidate:
+                    candidates.append(candidate)
+    parser_validation = metadata.get("parser_validation", {})
+    if isinstance(parser_validation, Mapping):
+        scan_targets = parser_validation.get("scan_targets", [])
+        if isinstance(scan_targets, list):
+            candidates.extend(str(path).strip() for path in scan_targets if str(path).strip())
+    deduped: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def _resolve_direct_compile_source(workspace_root: Path, metadata: Mapping[str, Any]) -> Path:
+    blueprint_dir = str(metadata.get("blueprint_dir", "")).strip()
+    for candidate in _direct_compile_candidates(metadata):
+        resolved = _resolve_workspace_candidate(workspace_root, candidate, blueprint_dir)
+        if resolved.is_file() and resolved.suffix.lower() == ".py":
+            return resolved
+    raise FileNotFoundError("DIRECT_COMPILE requires a resolvable Python source_entry/context path")
+
+
+def _resolve_direct_compile_output(workspace_root: Path, metadata: Mapping[str, Any], source_path: Path) -> Path:
+    scaffold = metadata.get("scaffold", {})
+    blueprint_dir = str(metadata.get("blueprint_dir", "")).strip()
+    distribution_directory = ""
+    scaffold_name = ""
+    if isinstance(scaffold, Mapping):
+        distribution_directory = str(scaffold.get("distribution_directory", "")).strip()
+        scaffold_name = str(scaffold.get("name", "")).strip()
+    output_dir = (
+        _resolve_workspace_candidate(workspace_root, distribution_directory, blueprint_dir)
+        if distribution_directory
+        else source_path.parent
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_name = f"{(scaffold_name or source_path.stem or 'matrix').strip()}.aeroc"
+    return (output_dir / output_name).resolve()
+
+
+def run_direct_compile(
+    workspace_root: str,
+    build_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compile the blueprint's primary source directly to a .aeroc artifact."""
+    workspace = Path(workspace_root).resolve()
+    if not workspace.is_dir():
+        raise NotADirectoryError(f"Workspace is not a directory: {workspace}")
+    metadata = dict(build_context) if isinstance(build_context, dict) else _extract_build_context(
+        workspace, _read_manifest_contract()
+    )
+    metadata["workspace_root"] = str(workspace)
+    metadata["resolved_strategy"] = "DIRECT_COMPILE"
+    metadata["selected_action_label"] = "direct_compile"
+    metadata["strategy_mode"] = "direct_compile"
+    source_path = _resolve_direct_compile_source(workspace, metadata)
+    output_path = _resolve_direct_compile_output(workspace, metadata, source_path)
+
+    import main as aero_main
+
+    report = aero_main.handle_aero_calculus_build(str(source_path), str(output_path), reduce_graph=True)
+    outputs = [output_path]
+    part2 = output_path.with_suffix("").with_name(output_path.stem + ".part2").with_suffix(".aeroc")
+    if part2.exists():
+        outputs.append(part2)
+    compiled_targets = [
+        {
+            "name": output.stem,
+            "source": str(source_path),
+            "output": str(output),
+            "bytes_written": output.stat().st_size,
+        }
+        for output in outputs
+        if output.exists()
+    ]
+    bytes_written = sum(target["bytes_written"] for target in compiled_targets)
+    metadata["compile_report"] = report
+    metadata["compiled_targets"] = compiled_targets
+    metadata["compiled_target_count"] = len(compiled_targets)
+    metadata["bytes_written"] = bytes_written
+    metadata["aeroc_output"] = str(output_path)
+    metadata["applied_assets"] = [str(output) for output in outputs if output.exists()]
+    metadata["should_write_aeroc"] = should_write_aeroc(
+        metadata["resolved_strategy"],
+        metadata["compiled_target_count"],
+        metadata["bytes_written"],
+    )
+    metadata["current_cycle"] = 1
+    return metadata
+
+
 def _user_selected_strategy(metadata: Mapping[str, Any]) -> str:
     strategy = str(metadata.get("blueprint_strategy", "")).strip()
     if strategy:

@@ -24,7 +24,10 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - environment dependent fallback
+    np = None  # type: ignore[assignment]
 
 from core.hin_vm import (
     ConstructorNode,
@@ -399,7 +402,10 @@ class UASTToHINTranslator:
         nodes = list(network.nodes.values())
         n = len(nodes)
         adj = self._adjacency(network, nodes)
-        edge_count = float(np.sum(adj) / 2.0)
+        if np is None:
+            edge_count = float(sum((sum(row) for row in adj)) / 2.0)
+        else:
+            edge_count = float(np.sum(adj) / 2.0)
         max_edges = n * (n - 1) / 2.0
         density = edge_count / max_edges if max_edges > 0 else 0.0
         avg_degree = (2.0 * edge_count / n) if n > 0 else 0.0
@@ -422,6 +428,8 @@ class UASTToHINTranslator:
         """
         limit = self.auto_split_threshold if threshold is None else threshold
         if len(module.nodes) <= limit:
+            return module, HINNetwork()
+        if np is None:
             return module, HINNetwork()
         return self.split_module(module)
 
@@ -549,7 +557,10 @@ class UASTToHINTranslator:
     def _adjacency(net: HINNetwork, node_list: List[Node]) -> np.ndarray:
         n = len(node_list)
         node_to_idx = {node.node_id: idx for idx, node in enumerate(node_list)}
-        adj = np.zeros((n, n))
+        if np is None:
+            adj = [[0.0 for _ in range(n)] for _ in range(n)]
+        else:
+            adj = np.zeros((n, n))
         for node in node_list:
             i = node_to_idx[node.node_id]
             for port in node.ports():
@@ -559,9 +570,16 @@ class UASTToHINTranslator:
                 j = node_to_idx.get(target.owner.node_id)
                 if j is None or j == i:
                     continue
-                adj[i, j] += 1.0
+                adj[i][j] += 1.0
         # Symmetrise (each undirected wire contributes to both endpoints).
-        adj = np.maximum(adj, adj.T)
+        if np is None:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    weight = max(adj[i][j], adj[j][i])
+                    adj[i][j] = weight
+                    adj[j][i] = weight
+        else:
+            adj = np.maximum(adj, adj.T)
         return adj
 
     @staticmethod
