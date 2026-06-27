@@ -394,6 +394,19 @@ def _extract_build_context(workspace_root: Path, manifest: Dict[str, Any]) -> Di
         if strategy:
             build_context["blueprint_strategy"] = strategy
 
+    # Promote the [system] strategy field to a top-level metadata key so all
+    # downstream stages (decision tree, orchestrator loop) can check for an
+    # explicit DIRECT_COMPILE directive without traversing the nested dict.
+    system_section = build_context.get("system", {})
+    if isinstance(system_section, dict):
+        bp_system_strategy = str(system_section.get("strategy", "")).strip()
+        if bp_system_strategy:
+            build_context["blueprint_system_strategy"] = bp_system_strategy
+
+    # Tag the context with the active top-level command so the FSM can guard
+    # strategy overrides that are inappropriate during a direct compile pass.
+    build_context.setdefault("active_command", "build")
+
     return build_context
 
 
@@ -1109,6 +1122,34 @@ def run_build(
 
             after_snapshot = collect_workspace_snapshot(workspace)
             _enforce_read_only_boundary(before_snapshot, after_snapshot)
+
+            # ── DIRECT_COMPILE enforcement clamp ──────────────────────────────
+            # If the active command is 'build' or the blueprint explicitly
+            # requests DIRECT_COMPILE, any residual AGGRESSIVE_MUTATION /
+            # polyglot-decomposition state produced by drift or FSM heuristics
+            # must be neutralised so the compiler backend is not bypassed.
+            _active_cmd_orch = str(metadata.get("active_command", "")).lower()
+            _bp_sys_strat_orch = str(metadata.get("blueprint_system_strategy", "")).upper()
+            _direct_compile_mode = (
+                _active_cmd_orch == "build" or _bp_sys_strat_orch == "DIRECT_COMPILE"
+            )
+            if _direct_compile_mode and (
+                metadata.get("resolved_strategy") == "AGGRESSIVE_MUTATION"
+                or metadata.get("strategy_mode") == "aggressive_decomposition"
+                or metadata.get("selected_action_label") in (
+                    "execute_polyglot_decomposition", "boost_mutation_sigma"
+                )
+            ):
+                logger.info(
+                    "DIRECT_COMPILE clamp applied (cycle %d): resolved_strategy was %r, "
+                    "action was %r — resetting to BALANCED/hold for compiler pass.",
+                    cycle,
+                    metadata.get("resolved_strategy"),
+                    metadata.get("selected_action_label"),
+                )
+                metadata["resolved_strategy"] = "BALANCED"
+                metadata["selected_action_label"] = "none"
+                metadata["strategy_mode"] = "hold"
 
             # Physical decomposition: when the FSM triggers aggressive
             # decomposition, physically split source monoliths into modules.

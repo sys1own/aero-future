@@ -545,10 +545,25 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     # Blueprint-driven strategy override: when the living blueprint requests
     # an aggressive optimization level or sets a low complexity ceiling, the
     # FSM yields to AGGRESSIVE_MUTATION regardless of score dynamics.
-    bp_opt_level = str(metadata.get('blueprint_optimization_level', '')).lower()
-    bp_max_complexity = metadata.get('blueprint_max_module_complexity')
-    if bp_opt_level == 'aggressive' or (bp_max_complexity is not None and int(bp_max_complexity) < 50):
-        primary_strategy = Strategy.AGGRESSIVE_MUTATION
+    # GUARD: If the active command is 'build' or the blueprint explicitly
+    # requests DIRECT_COMPILE, user compilation intent is authoritative and
+    # must never be downgraded to AGGRESSIVE_MUTATION by heuristic drift.
+    _active_cmd = str(metadata.get('active_command', '')).lower()
+    _bp_sys_strategy = str(metadata.get('blueprint_system_strategy', '')).upper()
+    _direct_compile_requested = (
+        _active_cmd == 'build' or _bp_sys_strategy == 'DIRECT_COMPILE'
+    )
+    if not _direct_compile_requested:
+        bp_opt_level = str(metadata.get('blueprint_optimization_level', '')).lower()
+        bp_max_complexity = metadata.get('blueprint_max_module_complexity')
+        if bp_opt_level == 'aggressive' or (bp_max_complexity is not None and int(bp_max_complexity) < 50):
+            primary_strategy = Strategy.AGGRESSIVE_MUTATION
+    else:
+        logger.info(
+            'DIRECT_COMPILE guard active (command=%r, blueprint_system_strategy=%r) — '
+            'AGGRESSIVE_MUTATION override suppressed; holding strategy: %s',
+            _active_cmd, _bp_sys_strategy, primary_strategy.name,
+        )
     metadata['primary_strategy'] = primary_strategy.name
     router = FallbackRouter(max_depth=fallback_depth, ttl_seconds=route_ttl)
     resolved_strategy, cascade_depth = router.route(metadata=metadata, primary_strategy=primary_strategy, score=current_score, confidence_minimum=confidence_min)

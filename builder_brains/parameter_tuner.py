@@ -1077,7 +1077,24 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
             drift_result = detect_parameter_drift(current_config, baseline_config, max_drift=max_drift)
             metadata['drift_analysis'] = drift_result
             if drift_result['drift_exceeded']:
-                logger.warning('Parameter drift detected: %d parameters exceed threshold', drift_result['drifted_count'])
+                # Check if a direct compile pass is in effect.  When it is,
+                # hyperparameter drift is purely informational — it must NOT
+                # be used as a signal to escalate into AGGRESSIVE_MUTATION or
+                # polyglot decomposition mode.
+                _active_cmd_tuner = str(metadata.get('active_command', '')).lower()
+                _bp_sys_strat_tuner = str(metadata.get('blueprint_system_strategy', '')).upper()
+                _direct_compile_tuner = (
+                    _active_cmd_tuner == 'build' or _bp_sys_strat_tuner == 'DIRECT_COMPILE'
+                )
+                if _direct_compile_tuner:
+                    logger.info(
+                        'Parameter drift detected (%d params) but DIRECT_COMPILE is active '
+                        '— suppressing drift_exceeded flag to preserve compilation intent.',
+                        drift_result['drifted_count'],
+                    )
+                    metadata['drift_analysis'] = dict(drift_result, drift_exceeded=False)
+                else:
+                    logger.warning('Parameter drift detected: %d parameters exceed threshold', drift_result['drifted_count'])
         else:
             metadata['drift_analysis'] = {'status': 'no_baseline_available'}
         if current_config:
