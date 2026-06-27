@@ -86,7 +86,7 @@ To prevent modern hardware compilers (like GCC, Clang, rustc, and nvcc) from int
 The diagram below tracks the complete lifecycle of an application passing through the Aero Future pipeline, transforming raw declarative human files into an optimized, deployment-ready architecture:
 
 ```text
- blueprint.aero (INI/DSL Layout) ──┐
+  blueprint.aero (INI/DSL Layout) ──┐
                                     ├─ Ingestion & Validation ──► Context Registry
  blueprint_config.json (Schema) ────┘                                  │
                                                                        ▼
