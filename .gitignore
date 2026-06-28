@@ -14,6 +14,11 @@ bin/aero_engine.backup
 context.aero
 invariant_schema_report.json
 
+# Compiled matrix asset + orchestration summary emitted by `main.py build`
+matrix.aeroc
+*.part2.aeroc
+WORKSPACE_AUDIT.md
+
 # Local environment
 .venv/
 venv/

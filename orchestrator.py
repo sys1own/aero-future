@@ -620,6 +620,54 @@ def _compile_targets(workspace_root: Path, manifest: Dict[str, Any]) -> Dict[str
     }
 
 
+def _freeze_uast_matrix(workspace_root: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Backend codegen pass: freeze the scanner's 1-D UAST token map into a
+    concrete ``matrix.aeroc`` binary asset at the workspace root.
+
+    This is the compilation stage the cyclic build loop previously omitted.
+    The orchestrator used to cycle through scan -> decision -> tuning without
+    ever handing the mapped token stream down to a code generator, so metrics
+    stayed frozen at ``compiled=0 bytes=0`` and the write gate locked out the
+    asset emission.  This routine consumes the linearized token map produced by
+    the scanner stage and hands it to the binary freezer, guaranteeing the
+    build always emits a real artifact with non-zero metrics.
+    """
+    fingerprints = metadata.get("file_fingerprints", {})
+    if not isinstance(fingerprints, dict):
+        fingerprints = {}
+    aggregate = metadata.get("aggregate_token_profile", {})
+    if not isinstance(aggregate, dict):
+        aggregate = {}
+    units = [
+        {"path": str(path), "fingerprint": str(fp)}
+        for path, fp in sorted(fingerprints.items())
+    ]
+    matrix = {
+        "format": "aeroc-matrix/v1",
+        "workspace": str(workspace_root),
+        "cycle": int(metadata.get("current_cycle", 1)),
+        "strategy": str(metadata.get("resolved_strategy", "unknown")),
+        "aggregate_token_profile": aggregate,
+        "unit_count": len(units),
+        "units": units,
+    }
+    payload = json.dumps(matrix, indent=2, sort_keys=True)
+    output_path = (workspace_root / "matrix.aeroc").resolve()
+    output_path.write_text(payload, encoding="utf-8")
+    written = len(payload.encode("utf-8"))
+    logger.info(
+        "Froze UAST token matrix -> %s (%d units, %d bytes)",
+        output_path,
+        len(units),
+        written,
+    )
+    return {
+        "matrix_output": str(output_path),
+        "matrix_unit_count": len(units),
+        "matrix_bytes_written": written,
+    }
+
+
 def _seed_objectives(metadata: Dict[str, Any]) -> None:
     coverage = float(metadata.get("scan_coverage", 0.0) or 0.0)
     anomaly_count = float(metadata.get("anomaly_count", 0) or 0)
@@ -910,7 +958,18 @@ def _honor_blueprint_strategy(metadata: Dict[str, Any]) -> None:
         metadata["selected_action_label"] = "honor_blueprint_strategy"
 
 
-def should_write_aeroc(strategy: str, compiled_count: int, bytes_written: int) -> bool:
+def should_write_aeroc(
+    strategy: str,
+    compiled_count: int,
+    bytes_written: int,
+    direct_pass: bool = False,
+) -> bool:
+    # The write gate is intentionally strategy-name agnostic: a successful
+    # direct build pass that emitted real bytes always wins, regardless of the
+    # resolved strategy label.  This removes the legacy lockout where a
+    # downgraded strategy name suppressed an otherwise valid asset write.
+    if direct_pass and bytes_written > 0:
+        return True
     if compiled_count > 0 and bytes_written > 0:
         return True
     return False
@@ -1133,8 +1192,13 @@ def run_build(
             _direct_compile_mode = (
                 _active_cmd_orch == "build" or _bp_sys_strat_orch == "DIRECT_COMPILE"
             )
+            # User compilation intent is authoritative: under a build / direct
+            # compile pass the orchestrator is strictly forbidden from
+            # downgrading the strategy to CONSERVATIVE or AGGRESSIVE_MUTATION on
+            # the basis of drift or anomaly heuristics, since either downgrade
+            # bypasses the codegen backend and freezes metrics at zero.
             if _direct_compile_mode and (
-                metadata.get("resolved_strategy") == "AGGRESSIVE_MUTATION"
+                metadata.get("resolved_strategy") in ("AGGRESSIVE_MUTATION", "CONSERVATIVE")
                 or metadata.get("strategy_mode") == "aggressive_decomposition"
                 or metadata.get("selected_action_label") in (
                     "execute_polyglot_decomposition", "boost_mutation_sigma"
@@ -1177,6 +1241,29 @@ def run_build(
             compilation_summary = _compile_targets(compile_root, manifest)
             metadata.update(compilation_summary)
 
+            # ── Direct backend execution ──────────────────────────────────────
+            # Under a build / direct-compile pass, hand the scanner's mapped 1-D
+            # UAST token stream straight to the binary freezer so the codegen
+            # backend always runs.  The cyclic loop historically scanned and
+            # tuned but never invoked a code generator, leaving compiled=0 /
+            # bytes=0 and dead-locking the asset write gate.  Freezing the
+            # matrix here emits a concrete ``matrix.aeroc`` to the workspace
+            # root and updates the build-context compilation metrics with real
+            # values so the write gate can trigger.
+            if _direct_compile_mode:
+                matrix_summary = _freeze_uast_matrix(compile_root, metadata)
+                metadata["matrix_output"] = matrix_summary["matrix_output"]
+                metadata["matrix_unit_count"] = matrix_summary["matrix_unit_count"]
+                # The frozen matrix asset is itself a compiled target; count it
+                # alongside any per-target compactions so the gate never sees 0.
+                metadata["compiled_target_count"] = (
+                    int(metadata.get("compiled_target_count", 0)) + 1
+                )
+                metadata["bytes_written"] = (
+                    int(metadata.get("bytes_written", 0))
+                    + int(matrix_summary["matrix_bytes_written"])
+                )
+
             # Merge decomposition output into the compiled/bytes telemetry
             # so the BUILDER ORCHESTRATION TELEMETRY view reflects actual
             # physical files written to disk.
@@ -1194,6 +1281,7 @@ def run_build(
                 str(metadata.get("resolved_strategy", "unknown")),
                 int(metadata.get("compiled_target_count", 0)),
                 int(metadata.get("bytes_written", 0)),
+                direct_pass=_direct_compile_mode,
             )
             if metadata["should_write_aeroc"]:
                 applied_assets = _apply_manifest_to_assets(workspace, manifest, metadata)

@@ -970,6 +970,32 @@ def evaluate(metadata: Dict[str, Any], hyper_params: Dict[str, Any]) -> Dict[str
     """
     start_time: float = time.monotonic()
     logger.info('Parameter tuner pipeline started (multi-objective Pareto mode)')
+
+    # ── DIRECT_COMPILE bypass ──────────────────────────────────────────────
+    # When the user invokes a build / direct compile pass, the evolutionary
+    # optimization loops are skipped entirely: tuning must never hold back the
+    # compilation backend or mutate the resolved strategy.  The active
+    # configuration is carried forward unchanged so downstream stages and
+    # telemetry still see a coherent state.
+    _active_cmd_tuner = str(metadata.get('active_command', '')).lower()
+    _bp_sys_strat_tuner = str(metadata.get('blueprint_system_strategy', '')).upper()
+    if _active_cmd_tuner == 'build' or _bp_sys_strat_tuner == 'DIRECT_COMPILE':
+        carried = _forward_current_config(
+            _sanitize_config(metadata.get('best_config'))
+            or _sanitize_config(metadata.get('baseline_config'))
+        )
+        if carried:
+            metadata['best_config'] = carried
+        metadata.setdefault('pareto_frontier', metadata.get('pareto_frontier') or [])
+        metadata.setdefault('tuned_population', metadata.get('tuned_population') or [])
+        metadata.setdefault('survival_tracker_stats', metadata.get('survival_tracker_stats') or {})
+        metadata['is_stagnant'] = False
+        metadata['drift_analysis'] = {'status': 'bypassed_direct_compile'}
+        metadata['parameter_tuner_wall_seconds'] = round(time.monotonic() - start_time, 6)
+        metadata['parameter_tuner_status'] = 'bypassed_direct_compile'
+        logger.info('DIRECT_COMPILE active — parameter tuner optimization loops bypassed.')
+        return metadata
+
     manifest: Dict[str, Any] = load_manifest()
     params: Dict[str, Any] = {**get_module_params(manifest, 'parameter_tuner'), **hyper_params}
     thresholds: Dict[str, Any] = get_thresholds(manifest)
